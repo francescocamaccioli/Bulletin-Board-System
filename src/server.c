@@ -68,8 +68,51 @@ int main(int argc, char** argv){
                     int code = ntohs(codercv);
                     printf ("connesso con codice: %d", code);
                     fflush(stdout);
+                    FILE* activeconn = fopen("activeconn.txt", "a");
+                    fprintf(activeconn, "SOC%d UNAME%s\n", connectsoc, "UNDEF");
+                    fclose(activeconn);
+                    printf("Connessione effettuata da un client sul SOC %d\n", connectsoc);
+                    fflush(stdout);
                     //ntohl
-
+                    uint8_t dim;
+                    ret = recv(connectsoc, (void*)&dim, sizeof(uint8_t),0); //receive the dimension of the username
+                    if(ret < 0){
+                        perror("recv error");
+                        exit(-1);
+                    }
+                    printf("Dim: %d\n", dim);
+                    fflush(stdout);
+                    char username[dim+1];
+                    ret = recv(connectsoc, (void*)username, dim, 0); //receive the username
+                    if(ret < 0){
+                        perror("recv error");
+                        exit(-1);
+                    }
+                    username[dim] = '\0';
+                    printf("Username: %s\n", username);
+                    fflush(stdout);
+                    activeconn = fopen ("activeconn.txt", "r");
+                    if (activeconn == 0){
+                        printf("Errore nell'apertura del file delle connessioni attive\n");
+                        fflush(stdout);
+                    }
+                    FILE* activeconntmp = fopen ("activeconntmp.txt", "w");
+                    if (activeconntmp == 0){
+                        printf("Errore nella creazione del file delle connessioni temporaneo\n");
+                        fflush(stdout);
+                    }
+                    int tmpsoc;
+                    char tmpuname[BUF_SIZE];
+                    while(fscanf(activeconn,"SOC%d UNAME%s\n",&tmpsoc,&tmpuname)!=EOF){
+                        if(tmpsoc==connectsoc){
+                            fprintf(activeconntmp, "SOC%d UNAME%s\n",tmpsoc,username);
+                        }
+                        else{
+                            fprintf(activeconntmp, "SOC%d UNAME%s\n",tmpsoc,tmpuname);
+                        }
+                    }
+                    fclose(activeconn);
+                    fclose(activeconntmp);
                     if(connectsoc>fdmax) fdmax = connectsoc;
                 }
                 else{ //Operazione sul socket di connessione
