@@ -1,6 +1,11 @@
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <openssl/dh.h>
+#include <openssl/hmac.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,10 +14,12 @@
 #include <time.h>
 
 #define BUF_SIZE 4096
+#define DATE_LEN 30
 
 int main(int argc, char** argv){
+    OpenSSL_add_all_algorithms();
     int lissoc, connectsoc;
-    struct sockaddr_in srv_addr, client_addr;
+    struct sockaddr_in srv_addr, server_addr;
     uint16_t port = (uint16_t)strtol(argv[1], NULL, 10);
     uint8_t dim;
 
@@ -56,63 +63,505 @@ int main(int argc, char** argv){
                     // commands
                 }
                 else if(selind==lissoc){ //Pronto il codice di ascolto: nuovo dispositivo connesso
-                    int len = sizeof (client_addr);
+                    int len = sizeof (server_addr);
                     int ret;    
-                    connectsoc = accept(lissoc, (struct sockaddr*) &client_addr, &len);
+                    connectsoc = accept(lissoc, (struct sockaddr*) &server_addr, &len);
                     FD_SET(connectsoc, &master); //Inserisco nuovo socket in fd_set master
-                    uint16_t codercv;
-                    ret = recv(connectsoc, (void*)&codercv, sizeof(uint16_t),0); //Ricevo il tipo di connessione 
-                    if(ret < 0 ){
-                        perror("recv error");
+                    FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
+                    if (!server_cert_file) {
+                        perror("Failed to open server certificate file");
+                        return 1;
                     }
-                    int code = ntohs(codercv);
-                    printf ("connesso con codice: %d", code);
-                    fflush(stdout);
+                    X509* server_cert;
+                    server_cert = PEM_read_X509(server_cert_file, NULL, NULL, NULL);
+                    if (!server_cert) {
+                        perror("Failed to read server certificate");
+                        return 1;
+                    }
+
+                    fclose(server_cert_file);
+
+                    //extract public key from server certificate
+                    EVP_PKEY *server_pub_key = X509_get_pubkey(server_cert);
+                    if (!server_pub_key) {
+                        perror("Failed to extract server public key");
+                        X509_free(server_cert);
+                        return 1;
+                    }
+                    RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
+                    if (rsa) {
+                        printf("RSA Public Key:\n");
+                        // Print RSA public key components
+                        printf("  Modulus: %s\n", BN_bn2hex(RSA_get0_n(rsa)));
+                        printf("  Exponent: %s\n", BN_bn2hex(RSA_get0_e(rsa)));
+                        RSA_free(rsa);
+                    } else {
+                        printf("Public key is not an RSA key.\n");
+                    }
+
+                    // Serializing the certificate to send it to the server
+                    unsigned char *cert_buf = NULL;
+                    long cert_len = i2d_X509(server_cert, &cert_buf);
+                    if (cert_len < 0) {
+                        perror("Failed to serialize server certificate");
+                        EVP_PKEY_free(server_pub_key);
+                        X509_free(server_cert);
+                        return 1;
+                    }
+                    
+                    //now i can send the certificate to the server
+                    printf("Serialized certificate length: %d\n", cert_len);
+                    printf("Serialized certificate:\n");
+                    for (int i = 0; i < cert_len; i++) {
+                        printf("%02x", cert_buf[i]);
+                    }
+                    printf("\n");
+                    uint32_t cert_len_n = htonl(cert_len);
+                    ret = send(connectsoc, (void*)&cert_len_n, sizeof(uint32_t), 0);
+                    if (ret < 0) {
+                        perror("Failed to send certificate length");
+                        EVP_PKEY_free(server_pub_key);
+                        X509_free(server_cert);
+                        return 1;
+                    }
+                    ret = send(connectsoc, (void*)cert_buf, cert_len, 0);
+                    if (ret < 0) {
+                        perror("Failed to send certificate");
+                        EVP_PKEY_free(server_pub_key);
+                        X509_free(server_cert);
+                        return 1;
+                    }
+
+                    EVP_PKEY_free(server_pub_key);
+                    X509_free(server_cert);
+                    free(cert_buf);
+
+
+
+
                     FILE* activeconn = fopen("activeconn.txt", "a");
                     fprintf(activeconn, "SOC%d UNAME%s\n", connectsoc, "UNDEF");
                     fclose(activeconn);
-                    printf("Connessione effettuata da un client sul SOC %d\n", connectsoc);
+                    printf("Connessione effettuata da un server sul SOC %d\n", connectsoc);
                     fflush(stdout);
-                    //ntohl
-                    uint8_t dim;
-                    ret = recv(connectsoc, (void*)&dim, sizeof(uint8_t),0); //receive the dimension of the username
-                    if(ret < 0){
-                        perror("recv error");
+
+                    // creating the DH parameters
+                    // generate DH parameters using RFC 5114: p and g are fixed
+                    EVP_PKEY* dh_params;
+                    dh_params = EVP_PKEY_new();
+                    EVP_PKEY_set1_DH(dh_params, DH_get_2048_224());
+
+                    // generating the server public-private key pair
+                    EVP_PKEY_CTX* pkDHctx = EVP_PKEY_CTX_new(dh_params, NULL);
+                    if (!pkDHctx){
+                        perror("Failed to create EVP_PKEY_CTX");
+                        EVP_PKEY_free(dh_params);
+                        return 1;
+                    }
+                    EVP_PKEY* server_keypair = NULL;
+                    ret = EVP_PKEY_keygen_init(pkDHctx);
+                    if (ret <= 0){
+                        perror("Failed to initialize key generation");
+                        EVP_PKEY_CTX_free(pkDHctx);
+                        EVP_PKEY_free(dh_params);
+                        return 1;
+                    }
+                    ret = EVP_PKEY_keygen(pkDHctx, &server_keypair);
+                    if (ret <= 0){
+                        perror("Failed to generate key pair");
+                        EVP_PKEY_CTX_free(pkDHctx);
+                        EVP_PKEY_free(dh_params);
+                        return 1;
+                    }
+
+                    // Extract the DH structure from the EVP_PKEY structure
+                    DH* dh = EVP_PKEY_get1_DH(server_keypair);
+                    if (!dh) {
+                        perror("Failed to extract DH structure from key pair");
+                        EVP_PKEY_free(server_keypair);
+                        EVP_PKEY_CTX_free(pkDHctx);
+                        EVP_PKEY_free(dh_params);
+                        return 1;
+                    }
+
+                    // Extract the public key from the DH structure
+                    const BIGNUM* pub_key_srv;
+                    const BIGNUM* priv_key_srv;
+                    DH_get0_key(dh, &pub_key_srv, &priv_key_srv); // Second argument is for the private key
+
+                    // Convert the public key from BIGNUM to string
+                    char* pub_key_str = BN_bn2hex(pub_key_srv);
+                    if (!pub_key_str) {
+                        perror("Failed to convert public key to string");
+                        DH_free(dh);
+                        EVP_PKEY_free(server_keypair);
+                        EVP_PKEY_CTX_free(pkDHctx);
+                        EVP_PKEY_free(dh_params);
+                        return 1;
+                    }
+                    
+                    // Receive the length of the serialized public key buffer
+                    uint32_t pub_key_len_n;
+                    int bytes_received = recv(connectsoc, (void*)&pub_key_len_n, sizeof(uint32_t), 0);
+                    if (bytes_received < 0) {
+                        perror("Error receiving public key length");
+                        return 1;
+                    }
+
+                    // Convert the length back to host byte order
+                    uint32_t pub_key_len = ntohl(pub_key_len_n);
+
+                    // Allocate memory for the serialized public key buffer
+                    unsigned char* pub_key_buf = malloc(pub_key_len);
+                    if (!pub_key_buf) {
+                        perror("Error allocating memory for public key");
+                        return 1;
+                    }
+
+                    // Receive the serialized public key
+                    bytes_received = recv(connectsoc, (void*)pub_key_buf, pub_key_len, 0);
+                    if (bytes_received < 0) {
+                        perror("Error receiving public key");
+                        free(pub_key_buf);
+                        return 1;
+                    }
+
+                    printf("Serialized public key length: %d\n", pub_key_len);
+                    printf("Serialized public key:\n");
+                    for (int i = 0; i < pub_key_len; i++) {
+                        printf("%02x", pub_key_buf[i]);
+                    }
+                    printf("\n");
+
+
+                    // Deserialize the public key
+                    EVP_PKEY* client_public_key = d2i_PUBKEY(NULL, (const unsigned char**)&pub_key_buf, pub_key_len);
+                    if (!client_public_key) {
+                        perror("Error deserializing public key");
+                        free(pub_key_buf);
+                        return 1;
+                    }
+                    printf("public key received from client\n");
+                    fflush(stdout);
+
+                    //send the server public key to the client
+                    unsigned char* srv_pkey_buf = NULL;
+                    int srv_pub_key_len = i2d_PUBKEY(server_keypair, &srv_pkey_buf);
+                    if (srv_pub_key_len < 0) {
+                        perror("Failed to serialize public key");
+                    }
+
+                    // print the serialized public key
+                    printf("Serialized public key: \n");
+                    for (int i = 0; i < pub_key_len; i++){
+                        printf("%02x", srv_pkey_buf[i]);
+                    }
+                    printf("\n");
+
+                    // Send the length of the serialized public key buffer
+                    uint32_t srv_pub_key_len_n = htonl(srv_pub_key_len);
+                    ret = send(connectsoc, (void*)&srv_pub_key_len_n, sizeof(uint32_t), 0);
+                    if (ret < 0) {
+                        perror("Error sending public key length");
+                        return 1;
+                    }
+
+                    printf("public key length sent to server\n");
+                    fflush(stdout);
+    
+
+                    // Send the serialized public key to the server
+                    ret = send(connectsoc, (void*)srv_pkey_buf, srv_pub_key_len, 0);
+                    if (ret < 0) {
+                        perror("Error sending public key");
+                        return 1;
+                    }
+
+                    printf("public key sent to client\n");
+                    fflush(stdout);
+
+                    // digitally sign the public key with the server private key
+                    // read RSA private key from file
+                    FILE* rsa_priv_key_file = fopen("server_privkey.pem", "r");
+                    if (!rsa_priv_key_file) {
+                        perror("Failed to open RSA private key file");
+                        return 1;
+                    }
+                    EVP_PKEY* rsa_priv_key = PEM_read_PrivateKey(rsa_priv_key_file, NULL, NULL, "TaylorSwift13");
+                    if (!rsa_priv_key) {
+                        perror("Failed to read RSA private key");
+                        return 1;
+                    }
+                    fclose(rsa_priv_key_file);
+
+                    // sign the public key
+                    unsigned char* signature;
+                    int signature_len;
+                    signature = (unsigned char*)malloc(EVP_PKEY_size(rsa_priv_key));
+                    EVP_MD_CTX* sign_ctx;
+                    sign_ctx = EVP_MD_CTX_new();
+                    EVP_SignInit(sign_ctx, EVP_sha256());
+                    EVP_SignUpdate(sign_ctx, srv_pkey_buf, srv_pub_key_len);
+                    EVP_SignFinal(sign_ctx, signature, (unsigned int*)&signature_len, rsa_priv_key);
+                    EVP_MD_CTX_free(sign_ctx);
+
+                    // send signature length to the client
+                    uint32_t signature_len_n = htonl(signature_len);
+                    ret = send(connectsoc, (void*)&signature_len_n, sizeof(uint32_t), 0);
+                    if (ret < 0) {
+                        perror("Error sending signature length");
+                        return 1;
+                    }
+                    // send the signature to the client
+                    ret = send(connectsoc, (void*)signature, signature_len, 0);
+                    if (ret < 0) {
+                        perror("Error sending signature");
+                        return 1;
+                    }
+
+
+                    
+                    
+
+                    // Generate the shared secret
+                    EVP_PKEY_CTX* ctx_drv = EVP_PKEY_CTX_new(server_keypair, NULL);
+                    EVP_PKEY_derive_init(ctx_drv);
+                    EVP_PKEY_derive_set_peer(ctx_drv, client_public_key);
+                    unsigned char* shared_secret;
+
+                    size_t shared_secret_len;
+                    EVP_PKEY_derive(ctx_drv, NULL, &shared_secret_len);
+
+                    shared_secret = (unsigned char*)malloc(shared_secret_len);
+                    EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
+
+                    // Print the shared secret
+                    printf("Shared secret: \n");
+                    for (int i = 0; i < shared_secret_len; i++) {
+                        printf("%02x", shared_secret[i]);
+                    }
+                    printf("\n");
+
+                    // generate the parameters for AES 256 CBC encryption
+                    // computing SHA256 hash of the shared secret
+                    unsigned char* AES_256_key;
+                    int AES_256_key_len;
+                    EVP_MD_CTX* keyctx;
+                    AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                    keyctx = EVP_MD_CTX_new();
+                    EVP_DigestInit(keyctx, EVP_sha256());
+                    EVP_DigestUpdate(keyctx,(unsigned char*)shared_secret, shared_secret_len);
+                    EVP_DigestFinal(keyctx, AES_256_key, (unsigned int*)&AES_256_key_len);
+                    EVP_MD_CTX_free(keyctx);
+
+
+                    // generate a random IV
+                    RAND_poll();
+                    unsigned char iv[16];
+                    memset(iv, 0, 16);
+                    RAND_bytes(iv, 16);
+                    
+                    // print the IV
+                    printf("IV: ");
+                    for (int i = 0; i < 16; i++){
+                        printf("%02x", iv[i]);
+                    }
+                    printf("\n");
+
+                    // send the IV to the client
+                    ret = send(connectsoc, (void*)iv, 16, 0);
+                    if (ret < 0){
+                        perror("error sending IV");
                         exit(-1);
                     }
-                    printf("Dim: %d\n", dim);
-                    fflush(stdout);
-                    char username[dim+1];
-                    ret = recv(connectsoc, (void*)username, dim, 0); //receive the username
-                    if(ret < 0){
-                        perror("recv error");
+                    printf("IV sent\n");
+                    
+                    // generate a random nonce
+                    RAND_poll();
+                    unsigned char nonce[32];
+                    memset(nonce, 0, 32);
+                    RAND_bytes(nonce, 32);
+
+                    // print the nonce
+                    printf("Nonce: ");
+                    for (int i = 0; i < 32; i++){
+                        printf("%02x", nonce[i]);
+                    }
+                    printf("\n");
+
+                    // encrypt the nonce with AES 256 CBC
+                    EVP_CIPHER_CTX* ctx_nonceenc;
+                    ctx_nonceenc = EVP_CIPHER_CTX_new();
+                    EVP_EncryptInit(ctx_nonceenc, EVP_aes_256_cbc(), AES_256_key, iv);
+                    unsigned char* enc_nonce;
+                    int enc_nonce_len;
+                    int outlen;
+                    enc_nonce = (unsigned char*)malloc(32 + 16);
+                    EVP_EncryptUpdate(ctx_nonceenc, enc_nonce, &outlen, (unsigned char*)nonce, 32);
+                    enc_nonce_len = outlen;
+                    EVP_EncryptFinal(ctx_nonceenc, enc_nonce + enc_nonce_len, &outlen);
+                    enc_nonce_len += outlen;
+
+                    // print the encrypted nonce
+                    printf("Encrypted nonce: ");
+                    for (int i = 0; i < enc_nonce_len; i++){
+                        printf("%02x", enc_nonce[i]);
+                    }
+                    printf("\n");
+    
+
+                    // send the encrypted nonce length to the client
+                    uint32_t enc_nonce_len_n = htonl(enc_nonce_len);
+                    ret = send(connectsoc, (void*)&enc_nonce_len_n, sizeof(uint32_t), 0);
+                    if (ret < 0){
+                        perror("error sending encrypted nonce length");
                         exit(-1);
                     }
-                    username[dim] = '\0';
-                    printf("Username: %s\n", username);
-                    fflush(stdout);
-                    activeconn = fopen ("activeconn.txt", "r");
-                    if (activeconn == 0){
-                        printf("Errore nell'apertura del file delle connessioni attive\n");
-                        fflush(stdout);
+                    printf("encrypted nonce length sent\n");
+                    
+                    // send the encrypted nonce to the client
+                    ret = send(connectsoc, (void*)enc_nonce, enc_nonce_len, 0);
+                    if (ret < 0){
+                        perror("error sending encrypted nonce");
+                        exit(-1);
                     }
-                    FILE* activeconntmp = fopen ("activeconntmp.txt", "w");
-                    if (activeconntmp == 0){
-                        printf("Errore nella creazione del file delle connessioni temporaneo\n");
-                        fflush(stdout);
+                    printf("encrypted nonce sent\n");
+
+
+                    int nonce_len = 32;
+
+                    // reverse the nonce
+                    for (int i = 0; i <  nonce_len/ 2; i++){
+                        unsigned char tmp = nonce[i];
+                        nonce[i] = nonce[nonce_len - i - 1];
+                        nonce[nonce_len - i - 1] = tmp;
                     }
-                    int tmpsoc;
-                    char tmpuname[BUF_SIZE];
-                    while(fscanf(activeconn,"SOC%d UNAME%s\n",&tmpsoc,&tmpuname)!=EOF){
-                        if(tmpsoc==connectsoc){
-                            fprintf(activeconntmp, "SOC%d UNAME%s\n",tmpsoc,username);
-                        }
-                        else{
-                            fprintf(activeconntmp, "SOC%d UNAME%s\n",tmpsoc,tmpuname);
-                        }
+
+                    // computing the HMAC of the nonce
+                    HMAC_CTX* hmac_ctx;
+                    hmac_ctx = HMAC_CTX_new();
+
+                    HMAC_Init(hmac_ctx, shared_secret, shared_secret_len, EVP_sha256());
+                    HMAC_Update(hmac_ctx, nonce, nonce_len);
+                    unsigned char* hmac;
+                    unsigned int hmac_len;
+                    hmac = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                    HMAC_Final(hmac_ctx, hmac, &hmac_len);
+                    HMAC_CTX_free(hmac_ctx);
+
+                    // print the HMAC
+                    printf("HMAC: ");
+                    for (int i = 0; i < hmac_len; i++){
+                        printf("%02x", hmac[i]);
                     }
-                    fclose(activeconn);
-                    fclose(activeconntmp);
+                    printf("\n");
+                    
+
+                    // receive the IV from the client
+                    unsigned char* received_iv;
+                    received_iv = (unsigned char*)malloc(16);
+                    ret = recv(connectsoc, (void*)received_iv, 16, 0);
+                    if (ret < 0){
+                        perror("error receiving IV");
+                        exit(-1);
+                    }
+                    
+                    // print the received IV
+                    printf("Received IV: ");
+                    for (int i = 0; i < 16; i++){
+                        printf("%02x", received_iv[i]);
+                    }
+                    printf("\n");
+
+                    // receive the encrypted structure length
+                    uint32_t enc_struct_len_n;
+                    ret = recv(connectsoc, (void*)&enc_struct_len_n, sizeof(uint32_t), 0);
+                    if (ret < 0){
+                        perror("error receiving encrypted structure length");
+                        exit(-1);
+                    }
+                    uint32_t enc_struct_len = ntohl(enc_struct_len_n);
+
+                    // receive the encrypted structure
+                    unsigned char* enc_struct;
+                    enc_struct = (unsigned char*)malloc(enc_struct_len);
+                    ret = recv(connectsoc, (void*)enc_struct, enc_struct_len, 0);
+                    if (ret < 0){
+                        perror("error receiving encrypted structure");
+                        exit(-1);
+                    }
+
+                    time_t t = time(NULL);
+                    struct tm tm = *localtime(&t);
+                    char timestamp[DATE_LEN];
+
+                    struct recv_data{
+                        char ts[DATE_LEN];
+                        unsigned char hmac[hmac_len];
+                    };
+
+                    // decrypt the structure
+                    EVP_CIPHER_CTX* ctx_structdec;
+                    ctx_structdec = EVP_CIPHER_CTX_new();
+                    EVP_DecryptInit(ctx_structdec, EVP_aes_256_cbc(), AES_256_key, received_iv);
+                    unsigned char* dec_struct;
+                    int dec_struct_len;
+                    dec_struct = (unsigned char*)malloc(enc_struct_len);
+                    EVP_DecryptUpdate(ctx_structdec, dec_struct, &outlen, enc_struct, enc_struct_len);
+                    dec_struct_len = outlen;
+                    EVP_DecryptFinal(ctx_structdec, dec_struct + dec_struct_len, &outlen);
+                    dec_struct_len += outlen;
+                    EVP_CIPHER_CTX_free(ctx_structdec);
+
+                    struct recv_data recv_auth;
+                    memcpy(&recv_auth, dec_struct, sizeof(recv_auth));
+
+                    // print the decrypted structure
+                    printf("Decrypted structure: \n");
+                    printf("Timestamp: %s\n", recv_auth.ts);
+                    printf("Received HMAC: ");
+                    for (int i = 0; i < hmac_len; i++){
+                        printf("%02x", recv_auth.hmac[i]);
+                    }
+                    printf("\n");
+
+                    // obtain the current timestamp
+                    time_t now = time(NULL);
+                    struct tm tm_now = *localtime(&now);
+                    char now_str[DATE_LEN];
+                    // timestamp format: YYYY-MM-DD HH:MM:SS
+                    sprintf(now_str, "%d-%02d-%02d %02d:%02d:%02d", tm_now.tm_year + 1900, tm_now.tm_mon + 1, tm_now.tm_mday, tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
+
+                    // compare the timestamps: the received timestamp (recv_auth.ts) must be within 2 minutes from the current timestamp
+                    struct tm recv_tm;
+                    strptime(recv_auth.ts, "%Y-%m-%d %H:%M:%S", &recv_tm);
+                    time_t recv_time = mktime(&recv_tm);
+                    time_t diff = difftime(now, recv_time);
+                    if (diff > 120){
+                        printf("Timestamps differ by more than 2 minutes, connection aborted\n");
+                        exit(-1);
+                    }
+                    else{
+                        printf("Timestamps differ by less than 2 minutes, connection accepted\n");
+                    }
+
+
+                    // compare the HMACs
+                    if(CRYPTO_memcmp(hmac, recv_auth.hmac, hmac_len) == 0){
+                        printf("HMACs match, authentication complete\n");
+                        exit(-1);
+                    }
+                    else{
+                        printf("HMACs do not match, connection aborted\n");
+                        exit(-1);
+                    }
+
+
+
+
+
+
+
                     if(connectsoc>fdmax) fdmax = connectsoc;
                 }
                 else{ //Operazione sul socket di connessione
