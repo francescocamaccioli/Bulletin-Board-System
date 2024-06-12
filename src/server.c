@@ -6,88 +6,122 @@
 #include <openssl/x509.h>
 #include <openssl/dh.h>
 #include <openssl/hmac.h>
+#include <openssl/rand.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include "clientlist.h"
 
 #define BUF_SIZE 4096
 #define DATE_LEN 30
 
+void checkreturnint(int ret, char* msg){
+   if(ret < 0){
+      perror(msg);
+      exit(EXIT_FAILURE);
+   }
+}
+
+void checkrnull(void* ret, char* msg){
+   if(!ret){
+      perror(msg);
+      exit(EXIT_FAILURE);
+   }
+}
+
 int main(int argc, char** argv){
+
+    if (argc != 2) {
+        fprintf(stderr, "Invalid arguments!\nUsage: ./server <port>\n");
+        exit(-1);
+    }
+
     OpenSSL_add_all_algorithms();
     int lissoc, connectsoc;
     struct sockaddr_in srv_addr, server_addr;
     uint16_t port = (uint16_t)strtol(argv[1], NULL, 10);
-    uint8_t dim;
 
     fd_set master;
     fd_set copy; //fd set utilizzato dalla select così non modifico il master
-
     FD_ZERO(&master);
     FD_ZERO(&copy);
-    lissoc= socket(AF_INET, SOCK_STREAM, 0);
+
+    lissoc = socket(AF_INET, SOCK_STREAM, 0);
+    if(lissoc < 0){
+        perror("socket error");
+        exit(-1);
+    }
+
     memset(&srv_addr, 0, sizeof(srv_addr));
     srv_addr.sin_family=AF_INET;
     srv_addr.sin_port=htons(port);
     inet_pton(AF_INET, "127.0.0.1", &srv_addr.sin_addr);
 
-    if(bind(lissoc, (struct sockaddr*)& srv_addr, sizeof(srv_addr)) < 0){
-        perror("bind error \n");
-        exit(-1);
-    }
+    checkreturnint(bind(lissoc, (struct sockaddr*)& srv_addr, sizeof(srv_addr)), "bind error");
+    checkreturnint(listen(lissoc, 10), "listen error");
 
-    if(listen(lissoc, 10) < 0){
-        perror("listen error \n");
-        exit(-1);
-    }
     FD_SET(0, &master); //Inserisco socket stdin tra i socket monitorati dalla select
     FD_SET(lissoc,&master);
 
     int fdmax;
     fdmax=lissoc;
     
-    printf("Server inizializzato correttamente, attendo prima richiesta \n");
+    printf("Server is ready to receive requests!\n");
     fflush(stdout);
 
     int selind;
-
     while(1){
-        copy=master;
-        select(fdmax+1, &copy, NULL, NULL, NULL); //In copy vengono lasciati solo i socket pronti. I socket pronti in ascolto diventano pronti quando c'è una nuova connessione mentre quelli di connessione diventano pronti quando c'è un nuovo dato
-        for(selind =0; selind <=fdmax; selind++){
+        copy = master;
+        select(fdmax+1, &copy, NULL, NULL, NULL);
+        //In copy vengono lasciati solo i socket pronti. I socket pronti in ascolto diventano pronti 
+        // quando c'è una nuova connessione mentre quelli di connessione diventano pronti quando c'è 
+        // un nuovo dato
+        for(selind = 0; selind <= fdmax; selind++){
             if(FD_ISSET(selind, &copy)){
                 if(selind == 0){ //Socket pronto = stdin
                     // commands
                 }
-                else if(selind==lissoc){ //Pronto il codice di ascolto: nuovo dispositivo connesso
-                    int len = sizeof (server_addr);
-                    int ret;    
+                else if(selind == lissoc){ //Pronto il codice di ascolto: nuovo dispositivo connesso
+                    int len = sizeof(server_addr);
                     connectsoc = accept(lissoc, (struct sockaddr*) &server_addr, &len);
-                    FD_SET(connectsoc, &master); //Inserisco nuovo socket in fd_set master
-                    FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
-                    if (!server_cert_file) {
-                        perror("Failed to open server certificate file");
-                        return 1;
+                    if(connectsoc == -1){
+                        perror("accept error");
+                        return -1;
                     }
+                    FD_SET(connectsoc, &master); //Inserisco nuovo socket in fd_set master
+                    printf("Client #%d connected\n", connectsoc);
+                    if(connectsoc > fdmax) fdmax = connectsoc;
+                }
+                else{
+                    //Operazione sul socket di connessione
+                    //Qua faccio uno switch per verificare quale tipologia di dispositivo è. In questo modo posso differenziare le operazioni. Per fare ciò recupero le informazioni dal file
+                    //Delle connessioni attive.
+                    char hello[6];
+                    int retr = recv(selind, (void*)&hello, 6, 0);
+                    printf("retr = %d\n", retr);
+                    printf("Received: %s\n", hello);
+                    if(strcmp(hello, "HELLO") != 0){
+                        printf("Client disconnected\n");
+                        FD_CLR(selind, &master);
+                        fflush(stdout);
+                        continue;
+                    }
+                    
+
+                    FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
+                    checkrnull(server_cert_file, "Failed to open server certificate file");
                     X509* server_cert;
                     server_cert = PEM_read_X509(server_cert_file, NULL, NULL, NULL);
-                    if (!server_cert) {
-                        perror("Failed to read server certificate");
-                        return 1;
-                    }
-
+                    checkrnull(server_cert, "Failed to read server certificate");
                     fclose(server_cert_file);
 
                     //extract public key from server certificate
-                    EVP_PKEY *server_pub_key = X509_get_pubkey(server_cert);
-                    if (!server_pub_key) {
-                        perror("Failed to extract server public key");
-                        X509_free(server_cert);
-                        return 1;
-                    }
+                    EVP_PKEY* server_pub_key = X509_get_pubkey(server_cert);
+                    checkrnull(server_pub_key, "Failed to extract server public key");
+
                     RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
                     if (rsa) {
                         printf("RSA Public Key:\n");
@@ -99,7 +133,7 @@ int main(int argc, char** argv){
                         printf("Public key is not an RSA key.\n");
                     }
 
-                    // Serializing the certificate to send it to the server
+                    // Serializing the certificate to send it to the client
                     unsigned char *cert_buf = NULL;
                     long cert_len = i2d_X509(server_cert, &cert_buf);
                     if (cert_len < 0) {
@@ -109,7 +143,7 @@ int main(int argc, char** argv){
                         return 1;
                     }
                     
-                    //now i can send the certificate to the server
+                    //now i can send the certificate to the client
                     printf("Serialized certificate length: %d\n", cert_len);
                     printf("Serialized certificate:\n");
                     for (int i = 0; i < cert_len; i++) {
@@ -117,15 +151,13 @@ int main(int argc, char** argv){
                     }
                     printf("\n");
                     uint32_t cert_len_n = htonl(cert_len);
-                    ret = send(connectsoc, (void*)&cert_len_n, sizeof(uint32_t), 0);
-                    if (ret < 0) {
+                    if(send(selind, (void*)&cert_len_n, sizeof(uint32_t), 0) < 0){
                         perror("Failed to send certificate length");
                         EVP_PKEY_free(server_pub_key);
                         X509_free(server_cert);
                         return 1;
                     }
-                    ret = send(connectsoc, (void*)cert_buf, cert_len, 0);
-                    if (ret < 0) {
+                    if(send(selind, (void*)cert_buf, cert_len, 0) < 0){
                         perror("Failed to send certificate");
                         EVP_PKEY_free(server_pub_key);
                         X509_free(server_cert);
@@ -135,15 +167,6 @@ int main(int argc, char** argv){
                     EVP_PKEY_free(server_pub_key);
                     X509_free(server_cert);
                     free(cert_buf);
-
-
-
-
-                    FILE* activeconn = fopen("activeconn.txt", "a");
-                    fprintf(activeconn, "SOC%d UNAME%s\n", connectsoc, "UNDEF");
-                    fclose(activeconn);
-                    printf("Connessione effettuata da un server sul SOC %d\n", connectsoc);
-                    fflush(stdout);
 
                     // creating the DH parameters
                     // generate DH parameters using RFC 5114: p and g are fixed
@@ -159,15 +182,13 @@ int main(int argc, char** argv){
                         return 1;
                     }
                     EVP_PKEY* server_keypair = NULL;
-                    ret = EVP_PKEY_keygen_init(pkDHctx);
-                    if (ret <= 0){
+                    if(EVP_PKEY_keygen_init(pkDHctx) <= 0){
                         perror("Failed to initialize key generation");
                         EVP_PKEY_CTX_free(pkDHctx);
                         EVP_PKEY_free(dh_params);
                         return 1;
                     }
-                    ret = EVP_PKEY_keygen(pkDHctx, &server_keypair);
-                    if (ret <= 0){
+                    if(EVP_PKEY_keygen(pkDHctx, &server_keypair) <= 0){
                         perror("Failed to generate key pair");
                         EVP_PKEY_CTX_free(pkDHctx);
                         EVP_PKEY_free(dh_params);
@@ -202,7 +223,7 @@ int main(int argc, char** argv){
                     
                     // Receive the length of the serialized public key buffer
                     uint32_t pub_key_len_n;
-                    int bytes_received = recv(connectsoc, (void*)&pub_key_len_n, sizeof(uint32_t), 0);
+                    int bytes_received = recv(selind, (void*)&pub_key_len_n, sizeof(uint32_t), 0);
                     if (bytes_received < 0) {
                         perror("Error receiving public key length");
                         return 1;
@@ -219,7 +240,7 @@ int main(int argc, char** argv){
                     }
 
                     // Receive the serialized public key
-                    bytes_received = recv(connectsoc, (void*)pub_key_buf, pub_key_len, 0);
+                    bytes_received = recv(selind, (void*)pub_key_buf, pub_key_len, 0);
                     if (bytes_received < 0) {
                         perror("Error receiving public key");
                         free(pub_key_buf);
@@ -260,22 +281,14 @@ int main(int argc, char** argv){
 
                     // Send the length of the serialized public key buffer
                     uint32_t srv_pub_key_len_n = htonl(srv_pub_key_len);
-                    ret = send(connectsoc, (void*)&srv_pub_key_len_n, sizeof(uint32_t), 0);
-                    if (ret < 0) {
-                        perror("Error sending public key length");
-                        return 1;
-                    }
+                    checkreturnint(send(selind, (void*)&srv_pub_key_len_n, sizeof(uint32_t), 0), "Error sending public key length");
 
                     printf("public key length sent to server\n");
                     fflush(stdout);
     
 
                     // Send the serialized public key to the server
-                    ret = send(connectsoc, (void*)srv_pkey_buf, srv_pub_key_len, 0);
-                    if (ret < 0) {
-                        perror("Error sending public key");
-                        return 1;
-                    }
+                    checkreturnint(send(selind, (void*)srv_pkey_buf, srv_pub_key_len, 0), "Error sending public key");
 
                     printf("public key sent to client\n");
                     fflush(stdout);
@@ -307,21 +320,9 @@ int main(int argc, char** argv){
 
                     // send signature length to the client
                     uint32_t signature_len_n = htonl(signature_len);
-                    ret = send(connectsoc, (void*)&signature_len_n, sizeof(uint32_t), 0);
-                    if (ret < 0) {
-                        perror("Error sending signature length");
-                        return 1;
-                    }
+                    checkreturnint(send(selind, (void*)&signature_len_n, sizeof(uint32_t), 0), "Error sending signature length");
                     // send the signature to the client
-                    ret = send(connectsoc, (void*)signature, signature_len, 0);
-                    if (ret < 0) {
-                        perror("Error sending signature");
-                        return 1;
-                    }
-
-
-                    
-                    
+                    checkreturnint(send(selind, (void*)signature, signature_len, 0), "Error sending signature");
 
                     // Generate the shared secret
                     EVP_PKEY_CTX* ctx_drv = EVP_PKEY_CTX_new(server_keypair, NULL);
@@ -369,11 +370,7 @@ int main(int argc, char** argv){
                     printf("\n");
 
                     // send the IV to the client
-                    ret = send(connectsoc, (void*)iv, 16, 0);
-                    if (ret < 0){
-                        perror("error sending IV");
-                        exit(-1);
-                    }
+                    checkreturnint(send(selind, (void*)iv, 16, 0), "error sending IV");
                     printf("IV sent\n");
                     
                     // generate a random nonce
@@ -412,19 +409,11 @@ int main(int argc, char** argv){
 
                     // send the encrypted nonce length to the client
                     uint32_t enc_nonce_len_n = htonl(enc_nonce_len);
-                    ret = send(connectsoc, (void*)&enc_nonce_len_n, sizeof(uint32_t), 0);
-                    if (ret < 0){
-                        perror("error sending encrypted nonce length");
-                        exit(-1);
-                    }
+                    checkreturnint(send(selind, (void*)&enc_nonce_len_n, sizeof(uint32_t), 0), "error sending encrypted nonce lenght");
                     printf("encrypted nonce length sent\n");
                     
                     // send the encrypted nonce to the client
-                    ret = send(connectsoc, (void*)enc_nonce, enc_nonce_len, 0);
-                    if (ret < 0){
-                        perror("error sending encrypted nonce");
-                        exit(-1);
-                    }
+                    checkreturnint(send(selind, (void*)enc_nonce, enc_nonce_len, 0), "error sending encrypted nonce");
                     printf("encrypted nonce sent\n");
 
 
@@ -440,7 +429,6 @@ int main(int argc, char** argv){
                     // computing the HMAC of the nonce
                     HMAC_CTX* hmac_ctx;
                     hmac_ctx = HMAC_CTX_new();
-
                     HMAC_Init(hmac_ctx, shared_secret, shared_secret_len, EVP_sha256());
                     HMAC_Update(hmac_ctx, nonce, nonce_len);
                     unsigned char* hmac;
@@ -448,23 +436,17 @@ int main(int argc, char** argv){
                     hmac = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
                     HMAC_Final(hmac_ctx, hmac, &hmac_len);
                     HMAC_CTX_free(hmac_ctx);
-
+                    printf("HMAC lenght: %d\n", hmac_len);
                     // print the HMAC
                     printf("HMAC: ");
                     for (int i = 0; i < hmac_len; i++){
                         printf("%02x", hmac[i]);
                     }
                     printf("\n");
-                    
-
                     // receive the IV from the client
                     unsigned char* received_iv;
                     received_iv = (unsigned char*)malloc(16);
-                    ret = recv(connectsoc, (void*)received_iv, 16, 0);
-                    if (ret < 0){
-                        perror("error receiving IV");
-                        exit(-1);
-                    }
+                    checkreturnint(recv(selind, (void*)received_iv, 16, 0), "error receiving IV");
                     
                     // print the received IV
                     printf("Received IV: ");
@@ -475,29 +457,21 @@ int main(int argc, char** argv){
 
                     // receive the encrypted structure length
                     uint32_t enc_struct_len_n;
-                    ret = recv(connectsoc, (void*)&enc_struct_len_n, sizeof(uint32_t), 0);
-                    if (ret < 0){
-                        perror("error receiving encrypted structure length");
-                        exit(-1);
-                    }
+                    checkreturnint(recv(selind, (void*)&enc_struct_len_n, sizeof(uint32_t), 0),"error receiving encrypted structure length");
                     uint32_t enc_struct_len = ntohl(enc_struct_len_n);
 
                     // receive the encrypted structure
                     unsigned char* enc_struct;
                     enc_struct = (unsigned char*)malloc(enc_struct_len);
-                    ret = recv(connectsoc, (void*)enc_struct, enc_struct_len, 0);
-                    if (ret < 0){
-                        perror("error receiving encrypted structure");
-                        exit(-1);
-                    }
-
+                    checkreturnint(recv(selind, (void*)enc_struct, enc_struct_len, 0), "error receiving encrypted structure");
+                    
                     time_t t = time(NULL);
                     struct tm tm = *localtime(&t);
                     char timestamp[DATE_LEN];
 
                     struct recv_data{
                         char ts[DATE_LEN];
-                        unsigned char hmac[hmac_len];
+                        unsigned char hmac[EVP_MAX_MD_SIZE];
                     };
 
                     // decrypt the structure
@@ -545,28 +519,13 @@ int main(int argc, char** argv){
                         printf("Timestamps differ by less than 2 minutes, connection accepted\n");
                     }
 
-
                     // compare the HMACs
                     if(CRYPTO_memcmp(hmac, recv_auth.hmac, hmac_len) == 0){
                         printf("HMACs match, authentication complete\n");
-                        exit(-1);
                     }
                     else{
                         printf("HMACs do not match, connection aborted\n");
-                        exit(-1);
                     }
-
-
-
-
-
-
-
-                    if(connectsoc>fdmax) fdmax = connectsoc;
-                }
-                else{ //Operazione sul socket di connessione
-                    //Qua faccio uno switch per verificare quale tipologia di dispositivo è. In questo modo posso differenziare le operazioni. Per fare ciò recupero le informazioni dal file
-                    //Delle connessioni attive.
                 }
             }
         }  

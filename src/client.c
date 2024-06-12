@@ -7,6 +7,7 @@
 #include <openssl/x509.h>
 #include <openssl/dh.h>
 #include <openssl/hmac.h>
+#include <openssl/rand.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -39,6 +40,12 @@ int login(int lissoc){
 }
 
 int main(int argc, char* argv[]){
+
+    if (argc != 2) {
+        fprintf(stderr, "Invalid arguments!\nUsage: ./client <port>\n");
+        exit(-1);
+    }
+
     int ret, lissoc;
     uint8_t dim;
     struct sockaddr_in srv_addr;
@@ -48,27 +55,18 @@ int main(int argc, char* argv[]){
     memset(&srv_addr, 0, sizeof(srv_addr));
     srv_addr.sin_family=AF_INET;
     srv_addr.sin_port=htons(port);
-    char* code = "5";
     inet_pton(AF_INET, "127.0.0.1", &srv_addr.sin_addr);
     ret = connect(lissoc, (struct sockaddr*) &srv_addr, sizeof(srv_addr));
     if (ret < 0){
         perror("Errore nella connect \n");
         exit(-1);
     }
-    // provando a fare hash sha256
 
-    unsigned char* digest;
-    int digestlen;
-    EVP_MD_CTX* ctx;
-    digest = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-    ctx = EVP_MD_CTX_new();
-    EVP_DigestInit(ctx, EVP_sha256());
-    EVP_DigestUpdate(ctx, (unsigned char*)code, sizeof(code));
-    EVP_DigestFinal(ctx, digest, (unsigned int *) &digestlen);
-    EVP_MD_CTX_free(ctx);
-    for(int i = 0; i < digestlen; i++)
-        printf("%02x", digest[i]);
-    printf("\n");
+    ret = send(lissoc, (void*)"HELLO\0", 6, 0);
+    if (ret < 0){
+        perror("error sending HELLO");
+        exit(-1);
+    }
 
     // receiving server certificate from socket
     X509* server_cert;
@@ -79,8 +77,9 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
     long cert_len_long = ntohl(cert_len);
+    printf("cert_len: %d\n", cert_len_long);
     unsigned char* cert_buffer = (unsigned char*)malloc(cert_len_long);
-    ret = recv(lissoc, (void*)cert_buffer, cert_len, 0);
+    ret = recv(lissoc, (void*)cert_buffer, cert_len_long, 0);
     if (ret < 0){
         perror("error receiving server certificate");
         exit(-1);
@@ -406,7 +405,7 @@ int main(int argc, char* argv[]){
         printf("%02x", hmac[i]);
     }
     printf("\n");
-
+    
     // build a structure to send the HMAC and the timestamp
     time_t t = time(NULL);
     struct tm tm = *localtime(&t);
@@ -416,7 +415,7 @@ int main(int argc, char* argv[]){
     uint32_t timestamp_len = htonl(DATE_LEN);
     struct srvsend{
         char timestamp[DATE_LEN];
-        unsigned char hmac[hmac_len];
+        unsigned char hmac[EVP_MAX_MD_SIZE];
     };
     struct srvsend tosend;
     memcpy(tosend.timestamp, timestamp, DATE_LEN);
@@ -471,28 +470,25 @@ int main(int argc, char* argv[]){
         perror("error sending encrypted structure length");
         exit(-1);
     }
-    printf("encrypted_len sent");
+    puts("encrypted_len sent");
     ret = send(lissoc, (void*)encrypted_struct, encrypted_len, 0);
     if (ret < 0){
         perror("error sending encrypted structure");
         exit(-1);
     }
-
-
-    /*
+    
     // send the HMAC to the server
     ret = send(lissoc, (void*)hmac, hmac_len, 0);
     if (ret < 0){
         perror("error sending HMAC");
         exit(-1);
     }
-    */
-
-
-
-
-
     
 
-    
+
+
+
+
+    close(lissoc);
+    return 0;
 }

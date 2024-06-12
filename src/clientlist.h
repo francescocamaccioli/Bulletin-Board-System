@@ -99,7 +99,7 @@ void printlist(clientList* list) {
     }
     printf("NULL\n");
 }
-
+/*
 int main(void) {
     clientList* list = createlist();
 
@@ -117,3 +117,4 @@ int main(void) {
 
     return 0;
 }
+*/
