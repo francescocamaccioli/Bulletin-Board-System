@@ -13,14 +13,33 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include "utils.h"
 
-#define BUF_SIZE 4096
-#define SURN_MAX_LEN 1024
-#define DATE_LEN 30
-#define SELECT_SIZE 128
+void help(){
+    puts("┌───────────────────────────────────────────────────────┐");
+    puts("│ Welcome to Bulletin Board System!                     │");
+    puts("│                                                       │");
+    puts("│ Available commands:                                   │");
+    puts("│ register <email> <username> <password>                │");
+    puts("│ login <username> <password>                           │");
+    puts("│ logout                                                │");
+    puts("│ list <n>             (to print latest n messages)     │");
+    puts("│ get <mid>            (to download a message content)  │");
+    puts("│ add <title> <body>   (to add a message to BBS)        │");
+    puts("└───────────────────────────────────────────────────────┘");
+}
+
+int lissoc = 0;
+
+void handle_sig(int sig) {
+    printf("\nCaught signal %d, closing socket and exiting...\n", sig);
+    if (lissoc > 0) {
+        close(lissoc);
+    }
+    exit(0);
+}
 
 int login(int lissoc){
-    printf("insert username: \n");
     char username [BUF_SIZE];
     scanf("%s", username);
     int size = strlen(username);
@@ -46,28 +65,34 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
 
-    int ret, lissoc;
+    signal(SIGINT, handle_sig);
+    signal(SIGQUIT, handle_sig);
+    
+    int ret;
     uint8_t dim;
     struct sockaddr_in srv_addr;
     char buffer [BUF_SIZE];
     uint16_t port = (uint16_t)strtol(argv[1], NULL, 10);
-    lissoc= socket(AF_INET, SOCK_STREAM, 0);
+    lissoc = socket(AF_INET, SOCK_STREAM, 0);
     memset(&srv_addr, 0, sizeof(srv_addr));
     srv_addr.sin_family=AF_INET;
     srv_addr.sin_port=htons(port);
     inet_pton(AF_INET, "127.0.0.1", &srv_addr.sin_addr);
     ret = connect(lissoc, (struct sockaddr*) &srv_addr, sizeof(srv_addr));
     if (ret < 0){
-        perror("Errore nella connect \n");
+        perror("Server socket connection error\n");
         exit(-1);
     }
 
+    puts("Starting Handshake...");
+    puts("Sending hello to server");
     ret = send(lissoc, (void*)"HELLO\0", 6, 0);
     if (ret < 0){
         perror("error sending HELLO");
         exit(-1);
     }
 
+    puts("Receiving certificate from server");
     // receiving server certificate from socket
     X509* server_cert;
     uint32_t cert_len;
@@ -89,7 +114,7 @@ int main(int argc, char* argv[]){
     for (int i = 0; i < cert_len_long; i++){
         printf("%02x", cert_buffer[i]);
     }
-    printf("\n");
+    printf("\n\n");
     // deserialize certificate using d2i_X509
     server_cert = d2i_X509(NULL, (const unsigned char**)&cert_buffer, cert_len_long);
     if (!server_cert){
@@ -97,6 +122,7 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
     // extracting RSA public key from certificate
+    puts("Extracting RSA public key from certificate");
     EVP_PKEY* server_pubkey = X509_get_pubkey(server_cert);
     if (!server_pubkey){
         perror("error extracting public key from certificate");
@@ -476,19 +502,83 @@ int main(int argc, char* argv[]){
         perror("error sending encrypted structure");
         exit(-1);
     }
-    
+    puts("Handshake successfully completed!");
+    /*
+    printf("sending HMAC of lenght: %d", hmac_len);
     // send the HMAC to the server
     ret = send(lissoc, (void*)hmac, hmac_len, 0);
     if (ret < 0){
         perror("error sending HMAC");
         exit(-1);
     }
+    */
+
+    char input[BUF_SIZE];
+    help();
+    // main command parsing loop
+    while (1) {
+        printf("Enter command: \n> ");
+        if (fgets(input, BUF_SIZE, stdin) == NULL) {
+            perror("Error reading input");
+            continue;
+        }
+        // Remove newline character
+        input[strcspn(input, "\n")] = 0;
+
+        char* command = strtok(input, " ");
+        char* arg = strtok(NULL, " ");
+
+        if (command == NULL) {
+            printf("Invalid input, please try again.\n");
+            continue;
+        }
+
+        if (strcmp(input, "register") == 0) {
+            if (arg == NULL) {
+                printf("Username and password are required to register.\n");
+            } 
+            else{
+                char* username = arg;
+                char* password = strtok(NULL, " ");
+            }
+        } else if (strcmp(input, "login") == 0) {
+            puts("Logging in...");
+            char* username = arg;
+        } else if (strcmp(input, "list") == 0) {
+            puts("Listing...");
+            int n = atoi(arg);
+            // checking overflows
+            if(n < 0){
+                puts("Invalid n, try again");
+                continue;
+            }
+            
+        } else if (strcmp(input, "get") == 0) {
+            puts("Downloading...");
+            int mid = atoi(arg);
+            if(mid < 0){
+                puts("Invalid mid, try again");
+                continue;
+            }
+            printf("mid=%d\n",mid);
+        } else if (strcmp(input, "add") == 0) {
+            puts("Posting message...");
+        } else if (strcmp(input, "logout") == 0) {
+            printf("Logging out...\n");
+            break;
+        } else if (strcmp(input, "help") == 0) {
+            help();
+        } else {
+            printf("Invalid choice, please try again.\n");
+        }
+    }
     
 
-
-
-
-
+    if(writen(lissoc, (void*)"logout", 7) < 0){
+        perror("error sending logout request");
+        exit(-1);
+    }
     close(lissoc);
+
     return 0;
 }

@@ -14,23 +14,9 @@
 #include <string.h>
 #include <time.h>
 #include "clientlist.h"
+#include "utils.h"
 
-#define BUF_SIZE 4096
-#define DATE_LEN 30
-
-void checkreturnint(int ret, char* msg){
-   if(ret < 0){
-      perror(msg);
-      exit(EXIT_FAILURE);
-   }
-}
-
-void checkrnull(void* ret, char* msg){
-   if(!ret){
-      perror(msg);
-      exit(EXIT_FAILURE);
-   }
-}
+int lissoc = 0, connectsoc = 0;
 
 int main(int argc, char** argv){
 
@@ -39,8 +25,50 @@ int main(int argc, char** argv){
         exit(-1);
     }
 
+    ClientList* clients = createlist();
+
+    FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
+    checkrnull(server_cert_file, "Failed to open server certificate file");
+    X509* server_cert;
+    server_cert = PEM_read_X509(server_cert_file, NULL, NULL, NULL);
+    checkrnull(server_cert, "Failed to read server certificate");
+    fclose(server_cert_file);
+
+    //extract public key from server certificate
+    EVP_PKEY* server_pub_key = X509_get_pubkey(server_cert);
+    checkrnull(server_pub_key, "Failed to extract server public key");
+
+    RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
+    if (rsa) {
+        printf("RSA Public Key:\n");
+        // Print RSA public key components
+        printf("  Modulus: %s\n", BN_bn2hex(RSA_get0_n(rsa)));
+        printf("  Exponent: %s\n", BN_bn2hex(RSA_get0_e(rsa)));
+        RSA_free(rsa);
+    } else {
+        printf("Public key is not an RSA key.\n");
+    }
+
+    // Serializing the certificate to send it to the client
+    unsigned char *cert_buf = NULL;
+    long cert_len = i2d_X509(server_cert, &cert_buf);
+    if (cert_len < 0) {
+        perror("Failed to serialize server certificate");
+        EVP_PKEY_free(server_pub_key);
+        X509_free(server_cert);
+        return 1;
+    }
+    
+    //now i can send the certificate to the client
+    printf("Serialized certificate length: %d\n", cert_len);
+    printf("Serialized certificate:\n");
+    for (int i = 0; i < cert_len; i++) {
+        printf("%02x", cert_buf[i]);
+    }
+    printf("\n");
+    uint32_t cert_len_n = htonl(cert_len);
+
     OpenSSL_add_all_algorithms();
-    int lissoc, connectsoc;
     struct sockaddr_in srv_addr, server_addr;
     uint16_t port = (uint16_t)strtol(argv[1], NULL, 10);
 
@@ -92,6 +120,7 @@ int main(int argc, char** argv){
                         return -1;
                     }
                     FD_SET(connectsoc, &master); //Inserisco nuovo socket in fd_set master
+                    checkreturnint(addclient(clients, connectsoc, 0), "addclient error");
                     printf("Client #%d connected\n", connectsoc);
                     if(connectsoc > fdmax) fdmax = connectsoc;
                 }
@@ -99,58 +128,24 @@ int main(int argc, char** argv){
                     //Operazione sul socket di connessione
                     //Qua faccio uno switch per verificare quale tipologia di dispositivo è. In questo modo posso differenziare le operazioni. Per fare ciò recupero le informazioni dal file
                     //Delle connessioni attive.
+
                     char hello[6];
                     int retr = recv(selind, (void*)&hello, 6, 0);
-                    printf("retr = %d\n", retr);
+                    if (retr < 0) {
+                        perror("recv error");
+                        close(selind);
+                        continue;
+                    }
+                    hello[retr] = '\0';
                     printf("Received: %s\n", hello);
                     if(strcmp(hello, "HELLO") != 0){
                         printf("Client disconnected\n");
                         FD_CLR(selind, &master);
+                        checkreturnint(removeclient(clients, selind), "removeclient error");
                         fflush(stdout);
                         continue;
                     }
                     
-
-                    FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
-                    checkrnull(server_cert_file, "Failed to open server certificate file");
-                    X509* server_cert;
-                    server_cert = PEM_read_X509(server_cert_file, NULL, NULL, NULL);
-                    checkrnull(server_cert, "Failed to read server certificate");
-                    fclose(server_cert_file);
-
-                    //extract public key from server certificate
-                    EVP_PKEY* server_pub_key = X509_get_pubkey(server_cert);
-                    checkrnull(server_pub_key, "Failed to extract server public key");
-
-                    RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
-                    if (rsa) {
-                        printf("RSA Public Key:\n");
-                        // Print RSA public key components
-                        printf("  Modulus: %s\n", BN_bn2hex(RSA_get0_n(rsa)));
-                        printf("  Exponent: %s\n", BN_bn2hex(RSA_get0_e(rsa)));
-                        RSA_free(rsa);
-                    } else {
-                        printf("Public key is not an RSA key.\n");
-                    }
-
-                    // Serializing the certificate to send it to the client
-                    unsigned char *cert_buf = NULL;
-                    long cert_len = i2d_X509(server_cert, &cert_buf);
-                    if (cert_len < 0) {
-                        perror("Failed to serialize server certificate");
-                        EVP_PKEY_free(server_pub_key);
-                        X509_free(server_cert);
-                        return 1;
-                    }
-                    
-                    //now i can send the certificate to the client
-                    printf("Serialized certificate length: %d\n", cert_len);
-                    printf("Serialized certificate:\n");
-                    for (int i = 0; i < cert_len; i++) {
-                        printf("%02x", cert_buf[i]);
-                    }
-                    printf("\n");
-                    uint32_t cert_len_n = htonl(cert_len);
                     if(send(selind, (void*)&cert_len_n, sizeof(uint32_t), 0) < 0){
                         perror("Failed to send certificate length");
                         EVP_PKEY_free(server_pub_key);
@@ -163,10 +158,6 @@ int main(int argc, char** argv){
                         X509_free(server_cert);
                         return 1;
                     }
-
-                    EVP_PKEY_free(server_pub_key);
-                    X509_free(server_cert);
-                    free(cert_buf);
 
                     // creating the DH parameters
                     // generate DH parameters using RFC 5114: p and g are fixed
@@ -342,7 +333,6 @@ int main(int argc, char** argv){
                         printf("%02x", shared_secret[i]);
                     }
                     printf("\n");
-
                     // generate the parameters for AES 256 CBC encryption
                     // computing SHA256 hash of the shared secret
                     unsigned char* AES_256_key;
@@ -526,8 +516,23 @@ int main(int argc, char** argv){
                     else{
                         printf("HMACs do not match, connection aborted\n");
                     }
+
+                    char logout[7];
+                    checkreturnint(readn(selind, logout, 7) < 0, "exit readn error");
+                    printf("Received: %s\n", logout);
+                    if(strcmp(logout, "logout") == 0){
+                        printf("Client #%d exited\n", selind);
+                        FD_CLR(selind, &master);
+                        close(selind);
+                        checkreturnint(removeclient(clients, selind), "removeclient error");
+                        fflush(stdout);
+                        continue;
+                    }
                 }
             }
         }  
     }
+    EVP_PKEY_free(server_pub_key);
+    X509_free(server_cert);
+    free(cert_buf);
 }

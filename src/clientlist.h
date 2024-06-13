@@ -2,20 +2,32 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <openssl/dh.h>
+#include <openssl/hmac.h>
+#include <openssl/rand.h>
+
+#define AES_KEY_LEN EVP_MD_size(EVP_sha256())
+#define SHARED_SECRET_LEN 513
 
 typedef struct clientNode{
    int clientfd;
-   int status; // idle, handshake...
-   void* next;
-} clientNode;
+   int status; // handshake status code || logged in TBD
+   unsigned char* AESkey;
+   unsigned char* shsec;
+   unsigned char* hashedpsw;
+   struct clientNode* next;
+} ClientNode;
 
 typedef struct clientList{
-   clientNode* head;
-   clientNode* tail;
-} clientList;
+   ClientNode* head;
+   ClientNode* tail;
+} ClientList;
 
-clientList* createlist() {
-    clientList* list = (clientList*)malloc(sizeof(clientList));
+ClientList* createlist() {
+    ClientList* list = (ClientList*)malloc(sizeof(ClientList));
     if (!list) {
         perror("Failed to allocate memory for list");
         exit(EXIT_FAILURE);
@@ -25,32 +37,33 @@ clientList* createlist() {
     return list;
 }
 
-int addclient(clientList* list, int fd, int s){
+int addclient(ClientList* list, int fd, int s){
    if(list == NULL){
 		perror("list uninitialized.");
 		return -1;
 	}
 
-	clientNode* toadd = (clientNode*)malloc(sizeof(clientNode));
+	ClientNode* toadd = (ClientNode*)malloc(sizeof(ClientNode));
     if (!toadd) {
       perror("Failed to allocate memory for new node");
       return -1;
    }
 	toadd->clientfd = fd;
    toadd->status = s;
+   toadd->AESkey = NULL;
 	toadd->next = NULL;
 
 	if(list->head == NULL || list->tail == NULL){
-		list->head = list->tail = (clientNode*)toadd;
+		list->head = list->tail = (ClientNode*)toadd;
 	}
 	else{
-		list->tail->next = (clientNode*)toadd;
-		list->tail = (clientNode*)toadd;
+		list->tail->next = (ClientNode*)toadd;
+		list->tail = (ClientNode*)toadd;
 	}
 	return 0;
 }
 
-int removeclient(clientList* list, int fd){
+int addkey(ClientList* list, int fd, unsigned char* key, unsigned char* sec){
    if (list == NULL){
 		perror("list uninitialized.");
 		return -1;
@@ -61,8 +74,44 @@ int removeclient(clientList* list, int fd){
 		return -1;
 	}
 
-   clientNode* temp = list->head;
-   clientNode* prev = NULL;
+   ClientNode* temp = list->head;
+   while (temp != NULL && temp->clientfd != fd){
+      temp = temp->next;
+   }
+
+   if(temp == NULL) {
+      perror("fd isn't in the list.");
+      return -1;
+   }
+
+   temp->AESkey = malloc(AES_KEY_LEN);
+   if (!temp->AESkey) {
+      perror("Failed to allocate memory for AESKey field");
+      return -1;
+   }
+   temp->shsec = malloc(SHARED_SECRET_LEN);
+   if (!temp->AESkey) {
+      perror("Failed to allocate memory for AESKey field");
+      return -1;
+   }
+   temp->AESkey = key;
+   temp->shsec = sec;
+   return 0;
+}
+
+int removeclient(ClientList* list, int fd){
+   if (list == NULL){
+		perror("list uninitialized.");
+		return -1;
+	}
+
+   if (list->head == NULL){
+		perror("list is empty.");
+		return -1;
+	}
+
+   ClientNode* temp = list->head;
+   ClientNode* prev = NULL;
 
    if (temp->clientfd == fd){
       list->head = temp->next;
@@ -91,8 +140,8 @@ int removeclient(clientList* list, int fd){
    return 0;
 }
 
-void printlist(clientList* list) {
-    clientNode* temp = list->head;
+void printlist(ClientList* list) {
+    ClientNode* temp = list->head;
     while (temp != NULL) {
         printf("%d->", temp->clientfd);
         temp = temp->next;
@@ -101,7 +150,7 @@ void printlist(clientList* list) {
 }
 /*
 int main(void) {
-    clientList* list = createlist();
+    ClientList* list = createlist();
 
     addclient(list, 10, 0);
     addclient(list, 20, 0);
