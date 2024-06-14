@@ -18,6 +18,104 @@
 
 int lissoc = 0, connectsoc = 0;
 
+// function to generate an IV and send it together with the HMAC computed with a shared secret
+void iv_comm(int selind, unsigned char* iv, unsigned char* shared_secret, int shared_secret_len){
+    // generate a random IV
+    RAND_poll();
+    RAND_bytes(iv, 16);
+
+    // send the IV to the client
+    checkreturnint(send(selind, (void*)iv, 16, 0), "error sending IV");
+    // print the IV
+    printf("IV: ");
+    for (int i = 0; i < 16; i++){
+        printf("%02x", iv[i]);
+    }
+    printf("IV sent\n");
+
+    // generate the IV HMAC
+    unsigned char* iv_hmac;
+    unsigned int iv_hmac_len;
+    iv_hmac = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+    compute_hmac(iv, 16, shared_secret, shared_secret_len, iv_hmac, &iv_hmac_len);
+
+    printf("IV HMAC: ");
+    for (int i = 0; i < iv_hmac_len; i++){
+        printf("%02x", iv_hmac[i]);
+    }
+    printf("\n");
+
+    // send the IV HMAC len to the client
+    printf("IV HMAC length: %d\n", iv_hmac_len);
+    uint32_t iv_hmac_len_n = htonl(iv_hmac_len);
+    checkreturnint(send(selind, (void*)&iv_hmac_len_n, sizeof(uint32_t), 0), "error sending IV HMAC length");
+    printf("IV HMAC length sent\n");
+
+    // send the IV HMAC to the client
+    checkreturnint(send(selind, (void*)iv_hmac, iv_hmac_len, 0), "error sending IV HMAC");
+    printf("IV HMAC sent\n");
+}
+
+// function to generate a message signature using the server private key
+void sign_message(unsigned char* message, int message_len, unsigned char* signature, unsigned int* signature_len){
+    FILE* rsa_priv_key_file = fopen("server_privkey.pem", "r");
+    if (!rsa_priv_key_file) {
+        perror("Failed to open RSA private key file");
+        exit(-1);
+    }
+    EVP_PKEY* rsa_priv_key = PEM_read_PrivateKey(rsa_priv_key_file, NULL, NULL, "TaylorSwift13");
+    if (!rsa_priv_key) {
+        perror("Failed to read RSA private key");
+        exit(-1);
+    }
+    fclose(rsa_priv_key_file);
+
+    EVP_MD_CTX* sign_ctx;
+    sign_ctx = EVP_MD_CTX_new();
+    EVP_SignInit(sign_ctx, EVP_sha256());
+    EVP_SignUpdate(sign_ctx, message, message_len);
+    EVP_SignFinal(sign_ctx, signature, signature_len, rsa_priv_key);
+    EVP_MD_CTX_free(sign_ctx);
+}
+
+// encrypt a message using AES 256 CBC
+void encrypt_message(unsigned char* message, int message_len, unsigned char* key, unsigned char* iv, unsigned char* ciphertext, int* ciphertext_len){
+    EVP_CIPHER_CTX* ctx;
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit(ctx, EVP_aes_256_cbc(), key, iv);
+    int outlen;
+    EVP_EncryptUpdate(ctx, ciphertext, &outlen, message, message_len);
+    *ciphertext_len = outlen;
+    EVP_EncryptFinal(ctx, ciphertext + outlen, &outlen);
+    *ciphertext_len += outlen;
+    EVP_CIPHER_CTX_free(ctx);
+}
+
+// decrypt a message using AES 256 CBC
+void decrypt_message(unsigned char* ciphertext, int ciphertext_len, unsigned char* key, unsigned char* iv, unsigned char* plaintext, int* plaintext_len){
+    EVP_CIPHER_CTX* ctx;
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit(ctx, EVP_aes_256_cbc(), key, iv);
+    int outlen;
+    EVP_DecryptUpdate(ctx, plaintext, &outlen, ciphertext, ciphertext_len);
+    *plaintext_len = outlen;
+    EVP_DecryptFinal(ctx, plaintext + outlen, &outlen);
+    *plaintext_len += outlen;
+    EVP_CIPHER_CTX_free(ctx);
+}
+
+
+// function to compute the HMAC of a message
+void compute_hmac(unsigned char* message, int message_len, unsigned char* key, int key_len, unsigned char* hmac, unsigned int* hmac_len){
+    HMAC_CTX* ctx;
+    ctx = HMAC_CTX_new();
+    HMAC_Init(ctx, key, key_len, EVP_sha256());
+    HMAC_Update(ctx, message, message_len);
+    HMAC_Final(ctx, hmac, hmac_len);
+    HMAC_CTX_free(ctx);
+}
+
+
 int main(int argc, char** argv){
 
     if (argc != 2) {
@@ -37,6 +135,18 @@ int main(int argc, char** argv){
     //extract public key from server certificate
     EVP_PKEY* server_pub_key = X509_get_pubkey(server_cert);
     checkrnull(server_pub_key, "Failed to extract server public key");
+
+    FILE* rsa_priv_key_file = fopen("server_privkey.pem", "r");
+    if (!rsa_priv_key_file) {
+        perror("Failed to open RSA private key file");
+        return 1;
+    }
+    EVP_PKEY* rsa_priv_key = PEM_read_PrivateKey(rsa_priv_key_file, NULL, NULL, "TaylorSwift13");
+    if (!rsa_priv_key) {
+        perror("Failed to read RSA private key");
+        return 1;
+    }
+    fclose(rsa_priv_key_file);
 
     RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
     if (rsa) {
@@ -256,7 +366,7 @@ int main(int argc, char** argv){
                     printf("public key received from client\n");
                     fflush(stdout);
 
-                    //send the server public key to the client
+                    //serialize the public key
                     unsigned char* srv_pkey_buf = NULL;
                     int srv_pub_key_len = i2d_PUBKEY(server_keypair, &srv_pkey_buf);
                     if (srv_pub_key_len < 0) {
@@ -283,31 +393,16 @@ int main(int argc, char** argv){
 
                     printf("public key sent to client\n");
                     fflush(stdout);
-
-                    // digitally sign the public key with the server private key
-                    // read RSA private key from file
-                    FILE* rsa_priv_key_file = fopen("server_privkey.pem", "r");
-                    if (!rsa_priv_key_file) {
-                        perror("Failed to open RSA private key file");
-                        return 1;
-                    }
-                    EVP_PKEY* rsa_priv_key = PEM_read_PrivateKey(rsa_priv_key_file, NULL, NULL, "TaylorSwift13");
-                    if (!rsa_priv_key) {
-                        perror("Failed to read RSA private key");
-                        return 1;
-                    }
-                    fclose(rsa_priv_key_file);
+                    
 
                     // sign the public key
                     unsigned char* signature;
                     int signature_len;
                     signature = (unsigned char*)malloc(EVP_PKEY_size(rsa_priv_key));
-                    EVP_MD_CTX* sign_ctx;
-                    sign_ctx = EVP_MD_CTX_new();
-                    EVP_SignInit(sign_ctx, EVP_sha256());
-                    EVP_SignUpdate(sign_ctx, srv_pkey_buf, srv_pub_key_len);
-                    EVP_SignFinal(sign_ctx, signature, (unsigned int*)&signature_len, rsa_priv_key);
-                    EVP_MD_CTX_free(sign_ctx);
+
+                    // sign public key with function
+                    sign_message(srv_pkey_buf, srv_pub_key_len, signature, &signature_len);
+
 
                     // send signature length to the client
                     uint32_t signature_len_n = htonl(signature_len);
@@ -345,23 +440,24 @@ int main(int argc, char** argv){
                     EVP_DigestFinal(keyctx, AES_256_key, (unsigned int*)&AES_256_key_len);
                     EVP_MD_CTX_free(keyctx);
 
-
-                    // generate a random IV
-                    RAND_poll();
-                    unsigned char iv[16];
-                    memset(iv, 0, 16);
-                    RAND_bytes(iv, 16);
-                    
-                    // print the IV
-                    printf("IV: ");
-                    for (int i = 0; i < 16; i++){
-                        printf("%02x", iv[i]);
+                    // print the AES 256 key
+                    printf("AES 256 key: \n");
+                    for (int i = 0; i < AES_256_key_len; i++){
+                        printf("%02x", AES_256_key[i]);
                     }
                     printf("\n");
 
-                    // send the IV to the client
-                    checkreturnint(send(selind, (void*)iv, 16, 0), "error sending IV");
-                    printf("IV sent\n");
+
+
+
+
+                    // generate a random IV
+                    unsigned char* iv = (unsigned char*)malloc(16);
+
+
+                    // send IV
+                    iv_comm(selind, iv, shared_secret, shared_secret_len);
+
                     
                     // generate a random nonce
                     RAND_poll();
@@ -377,6 +473,15 @@ int main(int argc, char** argv){
                     printf("\n");
 
                     // encrypt the nonce with AES 256 CBC
+                    printf("AES 256 key: \n");
+                    for (int i = 0; i < AES_256_key_len; i++){
+                        printf("%02x", AES_256_key[i]);
+                    }
+                    printf("\n");
+                    printf("IV: \n");
+                    for (int i = 0; i < 16; i++){
+                        printf("%02x", iv[i]);
+                    }
                     EVP_CIPHER_CTX* ctx_nonceenc;
                     ctx_nonceenc = EVP_CIPHER_CTX_new();
                     EVP_EncryptInit(ctx_nonceenc, EVP_aes_256_cbc(), AES_256_key, iv);
@@ -416,27 +521,14 @@ int main(int argc, char** argv){
                         nonce[nonce_len - i - 1] = tmp;
                     }
 
-                    // computing the HMAC of the nonce
-                    HMAC_CTX* hmac_ctx;
-                    hmac_ctx = HMAC_CTX_new();
-                    HMAC_Init(hmac_ctx, shared_secret, shared_secret_len, EVP_sha256());
-                    HMAC_Update(hmac_ctx, nonce, nonce_len);
-                    unsigned char* hmac;
-                    unsigned int hmac_len;
-                    hmac = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-                    HMAC_Final(hmac_ctx, hmac, &hmac_len);
-                    HMAC_CTX_free(hmac_ctx);
-                    printf("HMAC lenght: %d\n", hmac_len);
-                    // print the HMAC
-                    printf("HMAC: ");
-                    for (int i = 0; i < hmac_len; i++){
-                        printf("%02x", hmac[i]);
-                    }
-                    printf("\n");
+    
                     // receive the IV from the client
                     unsigned char* received_iv;
                     received_iv = (unsigned char*)malloc(16);
                     checkreturnint(recv(selind, (void*)received_iv, 16, 0), "error receiving IV");
+
+
+
                     
                     // print the received IV
                     printf("Received IV: ");
@@ -484,7 +576,7 @@ int main(int argc, char** argv){
                     printf("Decrypted structure: \n");
                     printf("Timestamp: %s\n", recv_auth.ts);
                     printf("Received HMAC: ");
-                    for (int i = 0; i < hmac_len; i++){
+                    for (int i = 0; i < EVP_MD_size(EVP_sha256()); i++){
                         printf("%02x", recv_auth.hmac[i]);
                     }
                     printf("\n");
@@ -509,8 +601,23 @@ int main(int argc, char** argv){
                         printf("Timestamps differ by less than 2 minutes, connection accepted\n");
                     }
 
+                    // compute the HMAC of the nonce by using the function
+                    unsigned char* computed_hmac_nonce;
+                    unsigned int computed_hmac_nonce_len;
+                    computed_hmac_nonce = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                    printf("Nonce: ");
+                    for (int i = 0; i < nonce_len; i++){
+                        printf("%02x", nonce[i]);
+                    }
+                    compute_hmac(nonce, nonce_len, shared_secret, shared_secret_len, computed_hmac_nonce, &computed_hmac_nonce_len);
+                    printf("Computed HMAC of the nonce: ");
+                    for (int i = 0; i < computed_hmac_nonce_len; i++){
+                        printf("%02x", computed_hmac_nonce[i]);
+                    }
+                    printf("\n");
+
                     // compare the HMACs
-                    if(CRYPTO_memcmp(hmac, recv_auth.hmac, hmac_len) == 0){
+                    if(CRYPTO_memcmp(computed_hmac_nonce, recv_auth.hmac, computed_hmac_nonce_len) == 0){
                         printf("HMACs match, authentication complete\n");
                     }
                     else{

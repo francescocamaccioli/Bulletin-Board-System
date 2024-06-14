@@ -13,7 +13,85 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <signal.h>
 #include "utils.h"
+
+// function to receive IV and HMAC and check if they are correct
+int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, size_t shared_secret_len){
+    // receive the IV
+    int ret = recv(lissoc, (void*)iv, 16, 0);
+    if (ret < 0){
+        perror("error receiving IV");
+        return -1;
+    }
+    // print the received IV
+    printf("Received IV: \n");
+    for (int i = 0; i < 16; i++){
+        printf("%02x", iv[i]);
+    }
+    // receive the IV HMAC
+    uint32_t iv_hmac_len_n;
+    ret = recv(lissoc, (void*)&iv_hmac_len_n, sizeof(uint32_t), 0);
+    if (ret < 0){
+        perror("error receiving IV HMAC length");
+        return -1;
+    }
+    long iv_hmac_len = ntohl(iv_hmac_len_n);
+    printf("iv_hmac_len: %d\n", iv_hmac_len);
+    unsigned char* iv_hmac = malloc(iv_hmac_len);
+    ret = recv(lissoc, (void*)iv_hmac, iv_hmac_len, 0);
+    if (ret < 0){
+        perror("error receiving IV HMAC");
+        return -1;
+    }
+    // print the received HMAC
+    printf("Received IV HMAC: \n");
+    for (int i = 0; i < iv_hmac_len; i++){
+        printf("%02x", iv_hmac[i]);
+    }
+    printf("\n");
+
+
+    // compute the HMAC of the IV
+    HMAC_CTX* iv_hmac_ctx;
+    iv_hmac_ctx = HMAC_CTX_new();
+    HMAC_Init(iv_hmac_ctx, shared_secret, shared_secret_len, EVP_sha256());
+    HMAC_Update(iv_hmac_ctx, iv, 16);
+    unsigned char* iv_hmac_comp;
+    unsigned int iv_hmac_len_comp;
+    iv_hmac_comp = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+    HMAC_Final(iv_hmac_ctx, iv_hmac_comp, &iv_hmac_len_comp);
+    HMAC_CTX_free(iv_hmac_ctx);
+    // print the computed HMAC
+    printf("Computed IV HMAC: \n");
+    for (int i = 0; i < iv_hmac_len_comp; i++){
+        printf("%02x", iv_hmac_comp[i]);
+    }
+    // check if the HMACs are equal
+    if (memcmp(iv_hmac, iv_hmac_comp, iv_hmac_len) != 0){
+        puts("IV HMACs are different, aborting");
+        return -1;
+    }
+    else{
+        puts("IV HMACs are equal, parameters accepted");
+    }
+    return 0;
+}
+
+// decrypt a message using AES 256 CBC
+void decrypt_message(unsigned char* ciphertext, int ciphertext_len, unsigned char* key, unsigned char* iv, unsigned char* plaintext, int* plaintext_len){
+    EVP_CIPHER_CTX* ctx;
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit(ctx, EVP_aes_256_cbc(), key, iv);
+    int outlen;
+    EVP_DecryptUpdate(ctx, plaintext, &outlen, ciphertext, ciphertext_len);
+    *plaintext_len = outlen;
+    EVP_DecryptFinal(ctx, plaintext + outlen, &outlen);
+    *plaintext_len += outlen;
+    EVP_CIPHER_CTX_free(ctx);
+}
+
+
 
 void help(){
     puts("┌───────────────────────────────────────────────────────┐");
@@ -347,17 +425,16 @@ int main(int argc, char* argv[]){
     EVP_DigestFinal(keyctx, AES_256_key, (unsigned int*)&AES_256_key_len);
     EVP_MD_CTX_free(keyctx);
 
-    // receive the server IV
-    unsigned char iv [16];
-    memset(iv, 0, 16);
-    ret = recv(lissoc, (void*)iv, 16, 0);
-    if (ret < 0){
-        perror("error receiving IV");
-        exit(-1);
+    printf("AES 256 key: \n");
+    for (int i = 0; i < AES_256_key_len; i++){
+        printf("%02x", AES_256_key[i]);
     }
-    printf("IV: \n");
+
+    unsigned char* srv_iv = malloc(16);
+    receiveIVHMAC(lissoc, srv_iv, shared_secret, shared_secret_len);
+    printf("srv_iv: \n");
     for (int i = 0; i < 16; i++){
-        printf("%02x", iv[i]);
+        printf("%02x", srv_iv[i]);
     }
     
     // receiving encrypted nonce length
@@ -380,37 +457,27 @@ int main(int argc, char* argv[]){
         printf("%02x", nonce[i]);
     }
     printf("\n");
-    // decrypting the nonce
-    EVP_CIPHER_CTX* ctx_decrypt;
-    ctx_decrypt = EVP_CIPHER_CTX_new();
-    EVP_CIPHER_CTX_init(ctx_decrypt);
-    EVP_DecryptInit(ctx_decrypt, EVP_aes_256_cbc(), AES_256_key, iv);
-    unsigned char* decrypted_nonce;
-    decrypted_nonce = (unsigned char*)malloc(nonce_len);
-    int decrypted_len;
-    int outlen;
-    EVP_DecryptUpdate(ctx_decrypt, decrypted_nonce, &outlen, nonce, nonce_len);
-    decrypted_len = outlen;
-    int res = EVP_DecryptFinal(ctx_decrypt, decrypted_nonce + decrypted_len, &outlen);
-    if (res == 0 ){
-        perror("error decrypting nonce");
-        exit(-1);
-    }
-    decrypted_len += outlen;
-    EVP_CIPHER_CTX_free(ctx_decrypt);
+    // decrypting the nonce using the decryption funciton
+    unsigned char decrypted_nonce[nonce_len];
+    int decrypted_nonce_len;
+    decrypt_message(nonce, nonce_len, AES_256_key, srv_iv, decrypted_nonce, &decrypted_nonce_len);
+    // print the decrypted nonce
     printf("\n Decrypted Nonce: \n");
-    for (int i = 0; i < decrypted_len; i++){
+    for (int i = 0; i < decrypted_nonce_len; i++){
         printf("%02x", decrypted_nonce[i]);
     }
     printf("\n");
-    int decrypted_nonce_len = decrypted_len;
-    // reverse the nonce
     for (int i = 0; i < decrypted_nonce_len/2; i++){
         unsigned char temp = decrypted_nonce[i];
         decrypted_nonce[i] = decrypted_nonce[decrypted_nonce_len - i - 1];
         decrypted_nonce[decrypted_nonce_len - i - 1] = temp;
     }
 
+    printf("\n Reversed Nonce: \n");
+    for (int i = 0; i < decrypted_nonce_len; i++){
+        printf("%02x", decrypted_nonce[i]);
+    }
+    printf("\n");
 
     // computing the HMAC of the nonce
     HMAC_CTX* hmac_ctx;
@@ -503,15 +570,7 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
     puts("Handshake successfully completed!");
-    /*
-    printf("sending HMAC of lenght: %d", hmac_len);
-    // send the HMAC to the server
-    ret = send(lissoc, (void*)hmac, hmac_len, 0);
-    if (ret < 0){
-        perror("error sending HMAC");
-        exit(-1);
-    }
-    */
+    
 
     char input[BUF_SIZE];
     help();
