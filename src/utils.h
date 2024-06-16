@@ -7,9 +7,13 @@
 
 #define BUF_SIZE 4096
 #define DATE_LEN 30
-#define SURN_MAX_LEN 1024
-#define DATE_LEN 30
 #define SELECT_SIZE 128
+#define HMAC_SIZE 32
+#define IV_SIZE 16
+#define CMDLEN 10
+#define EMAIL_LEN 40
+#define USERNAME_LEN 20
+#define PWD_LEN 128
 
 void checkreturnint(int ret, char* msg){
    if(ret < 0){
@@ -25,46 +29,77 @@ void checkrnull(void* ret, char* msg){
    }
 }
 
-/** Evita letture parziali
- *
- *   \retval -1   errore (errno settato)
- *   \retval  0   se durante la lettura da fd leggo EOF
- *   \retval size se termina con successo
- */
-static inline int readn(long fd, void* buf, size_t size) {
-    size_t left = size;
-    int r;
-    char* bufptr = (char*)buf;
-    while (left > 0) {
-        if ((r = read((int)fd, bufptr, left)) == -1) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (r == 0) return 0;   // EOF
-        left -= r;
-        bufptr += r;
+void compute_sha256(unsigned char *input, size_t input_len, unsigned char *hash) {
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        perror("EVP_MD_CTX_new failed");
+        exit(EXIT_FAILURE);
     }
-    return size;
+
+    if(!hash){
+        perror("need to allocate hash buffer first");
+        exit(EXIT_FAILURE);
+    }
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
+        perror("EVP_DigestInit_ex failed");
+        EVP_MD_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+
+    if (EVP_DigestUpdate(ctx, input, input_len) != 1) {
+        perror("EVP_DigestUpdate failed");
+        EVP_MD_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+
+    unsigned int hash_len;
+    if (EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1) {
+        perror("EVP_DigestFinal_ex failed");
+        EVP_MD_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+    EVP_MD_CTX_free(ctx);
 }
 
-/** Evita scritture parziali
- *
- *   \retval -1   errore (errno settato)
- *   \retval  0   se durante la scrittura la write ritorna 0
- *   \retval  1   se la scrittura termina con successo
- */
-static inline int writen(long fd, void* buf, size_t size) {
-    size_t left = size;
-    int r;
-    char* bufptr = (char*)buf;
-    while (left > 0) {
-        if ((r = write((int)fd, bufptr, left)) == -1) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (r == 0) return 0;
-        left -= r;
-        bufptr += r;
-    }
-    return 1;
+int verify_sha256(unsigned char *input, size_t input_len,unsigned char *expected_hash) {
+    unsigned char computed_hash[SHA256_DIGEST_LENGTH];
+    compute_sha256(input, input_len, computed_hash);
+    return memcmp(computed_hash, expected_hash, SHA256_DIGEST_LENGTH) == 0;
+}
+
+// encrypt a message using AES 256 CBC
+void encrypt_message(unsigned char* message, int message_len, unsigned char* key, unsigned char* iv, unsigned char* ciphertext, int* ciphertext_len){
+    EVP_CIPHER_CTX* ctx;
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit(ctx, EVP_aes_256_cbc(), key, iv);
+    int outlen;
+    EVP_EncryptUpdate(ctx, ciphertext, &outlen, message, message_len);
+    *ciphertext_len = outlen;
+    EVP_EncryptFinal(ctx, ciphertext + outlen, &outlen);
+    *ciphertext_len += outlen;
+    EVP_CIPHER_CTX_free(ctx);
+}
+
+// decrypt a message using AES 256 CBC
+void decrypt_message(unsigned char* ciphertext, int ciphertext_len, unsigned char* key, unsigned char* iv, unsigned char* plaintext, int* plaintext_len){
+    EVP_CIPHER_CTX* ctx;
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit(ctx, EVP_aes_256_cbc(), key, iv);
+    int outlen;
+    EVP_DecryptUpdate(ctx, plaintext, &outlen, ciphertext, ciphertext_len);
+    *plaintext_len = outlen;
+    EVP_DecryptFinal(ctx, plaintext + outlen, &outlen);
+    *plaintext_len += outlen;
+    EVP_CIPHER_CTX_free(ctx);
+}
+
+// function to compute the HMAC of a message
+void compute_hmac(unsigned char* message, int message_len, unsigned char* key, int key_len, unsigned char* hmac, unsigned int* hmac_len){
+    HMAC_CTX* ctx;
+    ctx = HMAC_CTX_new();
+    HMAC_Init(ctx, key, key_len, EVP_sha256());
+    HMAC_Update(ctx, message, message_len);
+    HMAC_Final(ctx, hmac, hmac_len);
+    HMAC_CTX_free(ctx);
 }

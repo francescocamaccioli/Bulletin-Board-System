@@ -78,44 +78,6 @@ void sign_message(unsigned char* message, int message_len, unsigned char* signat
     EVP_MD_CTX_free(sign_ctx);
 }
 
-// encrypt a message using AES 256 CBC
-void encrypt_message(unsigned char* message, int message_len, unsigned char* key, unsigned char* iv, unsigned char* ciphertext, int* ciphertext_len){
-    EVP_CIPHER_CTX* ctx;
-    ctx = EVP_CIPHER_CTX_new();
-    EVP_EncryptInit(ctx, EVP_aes_256_cbc(), key, iv);
-    int outlen;
-    EVP_EncryptUpdate(ctx, ciphertext, &outlen, message, message_len);
-    *ciphertext_len = outlen;
-    EVP_EncryptFinal(ctx, ciphertext + outlen, &outlen);
-    *ciphertext_len += outlen;
-    EVP_CIPHER_CTX_free(ctx);
-}
-
-// decrypt a message using AES 256 CBC
-void decrypt_message(unsigned char* ciphertext, int ciphertext_len, unsigned char* key, unsigned char* iv, unsigned char* plaintext, int* plaintext_len){
-    EVP_CIPHER_CTX* ctx;
-    ctx = EVP_CIPHER_CTX_new();
-    EVP_DecryptInit(ctx, EVP_aes_256_cbc(), key, iv);
-    int outlen;
-    EVP_DecryptUpdate(ctx, plaintext, &outlen, ciphertext, ciphertext_len);
-    *plaintext_len = outlen;
-    EVP_DecryptFinal(ctx, plaintext + outlen, &outlen);
-    *plaintext_len += outlen;
-    EVP_CIPHER_CTX_free(ctx);
-}
-
-
-// function to compute the HMAC of a message
-void compute_hmac(unsigned char* message, int message_len, unsigned char* key, int key_len, unsigned char* hmac, unsigned int* hmac_len){
-    HMAC_CTX* ctx;
-    ctx = HMAC_CTX_new();
-    HMAC_Init(ctx, key, key_len, EVP_sha256());
-    HMAC_Update(ctx, message, message_len);
-    HMAC_Final(ctx, hmac, hmac_len);
-    HMAC_CTX_free(ctx);
-}
-
-
 int main(int argc, char** argv){
 
     if (argc != 2) {
@@ -150,10 +112,10 @@ int main(int argc, char** argv){
 
     RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
     if (rsa) {
-        printf("RSA Public Key:\n");
+        //printf("RSA Public Key:\n");
         // Print RSA public key components
-        printf("  Modulus: %s\n", BN_bn2hex(RSA_get0_n(rsa)));
-        printf("  Exponent: %s\n", BN_bn2hex(RSA_get0_e(rsa)));
+        //printf("  Modulus: %s\n", BN_bn2hex(RSA_get0_n(rsa)));
+        //printf("  Exponent: %s\n", BN_bn2hex(RSA_get0_e(rsa)));
         RSA_free(rsa);
     } else {
         printf("Public key is not an RSA key.\n");
@@ -170,12 +132,14 @@ int main(int argc, char** argv){
     }
     
     //now i can send the certificate to the client
+    /*
     printf("Serialized certificate length: %d\n", cert_len);
     printf("Serialized certificate:\n");
     for (int i = 0; i < cert_len; i++) {
         printf("%02x", cert_buf[i]);
     }
     printf("\n");
+    */
     uint32_t cert_len_n = htonl(cert_len);
 
     OpenSSL_add_all_algorithms();
@@ -239,19 +203,14 @@ int main(int argc, char** argv){
                     //Qua faccio uno switch per verificare quale tipologia di dispositivo è. In questo modo posso differenziare le operazioni. Per fare ciò recupero le informazioni dal file
                     //Delle connessioni attive.
 
-                    char hello[6];
-                    int retr = recv(selind, (void*)&hello, 6, 0);
-                    if (retr < 0) {
-                        perror("recv error");
-                        close(selind);
-                        continue;
-                    }
-                    hello[retr] = '\0';
-                    printf("Received: %s\n", hello);
-                    if(strcmp(hello, "HELLO") != 0){
+                    char cmd[CMDLEN];
+                    checkreturnint(recv(selind, (void*)&cmd, CMDLEN, 0), "recv hello error");                    
+                    printf("Received: %s\n", cmd);
+                    if(strcmp(cmd, "hello") != 0){
                         printf("Client disconnected\n");
                         FD_CLR(selind, &master);
                         checkreturnint(removeclient(clients, selind), "removeclient error");
+                        close(selind);
                         fflush(stdout);
                         continue;
                     }
@@ -347,14 +306,14 @@ int main(int argc, char** argv){
                         free(pub_key_buf);
                         return 1;
                     }
-
+/*
                     printf("Serialized public key length: %d\n", pub_key_len);
                     printf("Serialized public key:\n");
                     for (int i = 0; i < pub_key_len; i++) {
                         printf("%02x", pub_key_buf[i]);
                     }
                     printf("\n");
-
+*/
 
                     // Deserialize the public key
                     EVP_PKEY* client_public_key = d2i_PUBKEY(NULL, (const unsigned char**)&pub_key_buf, pub_key_len);
@@ -372,14 +331,14 @@ int main(int argc, char** argv){
                     if (srv_pub_key_len < 0) {
                         perror("Failed to serialize public key");
                     }
-
+/*
                     // print the serialized public key
                     printf("Serialized public key: \n");
                     for (int i = 0; i < pub_key_len; i++){
                         printf("%02x", srv_pkey_buf[i]);
                     }
                     printf("\n");
-
+*/
                     // Send the length of the serialized public key buffer
                     uint32_t srv_pub_key_len_n = htonl(srv_pub_key_len);
                     checkreturnint(send(selind, (void*)&srv_pub_key_len_n, sizeof(uint32_t), 0), "Error sending public key length");
@@ -387,14 +346,12 @@ int main(int argc, char** argv){
                     printf("public key length sent to server\n");
                     fflush(stdout);
     
-
                     // Send the serialized public key to the server
                     checkreturnint(send(selind, (void*)srv_pkey_buf, srv_pub_key_len, 0), "Error sending public key");
 
                     printf("public key sent to client\n");
                     fflush(stdout);
                     
-
                     // sign the public key
                     unsigned char* signature;
                     int signature_len;
@@ -402,7 +359,6 @@ int main(int argc, char** argv){
 
                     // sign public key with function
                     sign_message(srv_pkey_buf, srv_pub_key_len, signature, &signature_len);
-
 
                     // send signature length to the client
                     uint32_t signature_len_n = htonl(signature_len);
@@ -448,17 +404,10 @@ int main(int argc, char** argv){
                     printf("\n");
 
 
-
-
-
                     // generate a random IV
                     unsigned char* iv = (unsigned char*)malloc(16);
-
-
                     // send IV
                     iv_comm(selind, iv, shared_secret, shared_secret_len);
-
-                    
                     // generate a random nonce
                     RAND_poll();
                     unsigned char nonce[32];
@@ -527,9 +476,6 @@ int main(int argc, char** argv){
                     received_iv = (unsigned char*)malloc(16);
                     checkreturnint(recv(selind, (void*)received_iv, 16, 0), "error receiving IV");
 
-
-
-                    
                     // print the received IV
                     printf("Received IV: ");
                     for (int i = 0; i < 16; i++){
@@ -624,16 +570,32 @@ int main(int argc, char** argv){
                         printf("HMACs do not match, connection aborted\n");
                     }
 
-                    char logout[7];
-                    checkreturnint(readn(selind, logout, 7) < 0, "exit readn error");
-                    printf("Received: %s\n", logout);
-                    if(strcmp(logout, "logout") == 0){
+
+                    checkreturnint(recv(selind, (void*)&cmd, CMDLEN, 0), "recv of command error");                    
+                    if (strcmp(cmd, "register") == 0) {
+                        printf("Registering user...\n");
+
+                    } else if (strcmp(cmd, "login") == 0) {
+                        printf("Logging in user with username\n");
+
+                    } else if (strcmp(cmd, "list") == 0) {
+                        printf("Listing items...\n");
+
+                    } else if (strcmp(cmd, "get") == 0) {
+                        printf("Getting item\n");
+
+                    } else if (strcmp(cmd, "add") == 0) {
+                        printf("Adding item\n");
+
+                    } else if (strcmp(cmd, "logout") == 0) {
                         printf("Client #%d exited\n", selind);
                         FD_CLR(selind, &master);
                         close(selind);
                         checkreturnint(removeclient(clients, selind), "removeclient error");
                         fflush(stdout);
                         continue;
+                    } else {
+                        printf("Invalid cmd received.\n");
                     }
                 }
             }

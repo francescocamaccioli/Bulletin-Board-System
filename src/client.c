@@ -78,21 +78,6 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
     return 0;
 }
 
-// decrypt a message using AES 256 CBC
-void decrypt_message(unsigned char* ciphertext, int ciphertext_len, unsigned char* key, unsigned char* iv, unsigned char* plaintext, int* plaintext_len){
-    EVP_CIPHER_CTX* ctx;
-    ctx = EVP_CIPHER_CTX_new();
-    EVP_DecryptInit(ctx, EVP_aes_256_cbc(), key, iv);
-    int outlen;
-    EVP_DecryptUpdate(ctx, plaintext, &outlen, ciphertext, ciphertext_len);
-    *plaintext_len = outlen;
-    EVP_DecryptFinal(ctx, plaintext + outlen, &outlen);
-    *plaintext_len += outlen;
-    EVP_CIPHER_CTX_free(ctx);
-}
-
-
-
 void help(){
     puts("┌───────────────────────────────────────────────────────┐");
     puts("│ Welcome to Bulletin Board System!                     │");
@@ -117,7 +102,7 @@ void handle_sig(int sig) {
     exit(0);
 }
 
-int login(int lissoc){
+int BBSlogin(int lissoc){
     char username [BUF_SIZE];
     scanf("%s", username);
     int size = strlen(username);
@@ -142,7 +127,6 @@ int main(int argc, char* argv[]){
         fprintf(stderr, "Invalid arguments!\nUsage: ./client <port>\n");
         exit(-1);
     }
-
     signal(SIGINT, handle_sig);
     signal(SIGQUIT, handle_sig);
     
@@ -164,11 +148,7 @@ int main(int argc, char* argv[]){
 
     puts("Starting Handshake...");
     puts("Sending hello to server");
-    ret = send(lissoc, (void*)"HELLO\0", 6, 0);
-    if (ret < 0){
-        perror("error sending HELLO");
-        exit(-1);
-    }
+    checkreturnint(send(lissoc, (void*)"hello", CMDLEN, 0), "error sending hello");
 
     puts("Receiving certificate from server");
     // receiving server certificate from socket
@@ -594,34 +574,91 @@ int main(int argc, char* argv[]){
 
         if (strcmp(input, "register") == 0) {
             if (arg == NULL) {
-                printf("Username and password are required to register.\n");
+                printf("Missing argument!\nUsage: register <email> <username> <password>");
             } 
             else{
-                char* username = arg;
+                puts("Sending register to server");
+                checkreturnint(send(lissoc, (void*)"register", CMDLEN, 0), "error sending register");
+                char* email = arg;
+                char* username = strtok(NULL, " ");
                 char* password = strtok(NULL, " ");
+                if(!email || !username || !password){
+                    puts("Missing argument!\nUsage: register <email> <username> <password>");
+                    continue;
+                }
+                unsigned char* pwd_hash = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                if(!pwd_hash){
+                    perror("memory finished");
+                    exit(EXIT_FAILURE);
+                }
+                compute_sha256((unsigned char*)password, strlen(password), pwd_hash);
+                int total_len = strlen(email)+strlen(username)+strlen(password);
+                char* tosend = malloc(total_len+3);
+                if (!tosend){
+                    perror("Error creating packet..");
+                    continue;
+                };
+                snprintf(tosend, total_len+2, "%s,%s,%s", email, username, pwd_hash);
+
+                // need to encrypt tosend with AES256 and compute its HMAC before sending them to server
+
             }
         } else if (strcmp(input, "login") == 0) {
             puts("Logging in...");
+            checkreturnint(send(lissoc, (void*)"login", CMDLEN, 0), "error sending login");
             char* username = arg;
+            char* password = strtok(NULL, " ");
+            if(!username || !password){
+                puts("Missing argument!\nUsage: login <username> <password>");
+                continue;
+            }
+            unsigned char* pwd_hash = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+            if(!pwd_hash){
+                perror("memory finished");
+                exit(EXIT_FAILURE);
+            }
+            compute_sha256((unsigned char*)password, strlen(password), pwd_hash);
+            int total_len = strlen(username)+strlen(password);
+            char* tosend = malloc(total_len+2);
+            if (!tosend){
+                perror("Error creating packet..");
+                continue;
+            };
+            snprintf(tosend, total_len+2, "%s,%s", username, pwd_hash);
+
+            
+
         } else if (strcmp(input, "list") == 0) {
-            puts("Listing...");
+            puts("Listing n messages...");
             int n = atoi(arg);
             // checking overflows
             if(n < 0){
                 puts("Invalid n, try again");
                 continue;
             }
+            char* tosend = malloc(CMDLEN+sizeof(n));
+            snprintf(tosend, CMDLEN+sizeof(n), "%s,%s", "login", arg);
+
+
             
         } else if (strcmp(input, "get") == 0) {
-            puts("Downloading...");
             int mid = atoi(arg);
             if(mid < 0){
                 puts("Invalid mid, try again");
                 continue;
             }
-            printf("mid=%d\n",mid);
+            printf("Downloading message with mid=%d\n",mid);
+            char* tosend = malloc(CMDLEN+sizeof(mid));
+            snprintf(tosend, CMDLEN+sizeof(mid), "%s,%s", "get", arg);
+
+
         } else if (strcmp(input, "add") == 0) {
             puts("Posting message...");
+            char* title = arg;
+            char* body = strtok(NULL, "\0");
+            char* tosend = malloc(CMDLEN+strlen(title)+strlen(body));
+            snprintf(tosend, CMDLEN+strlen(title)+strlen(body), "%s,%s,%s", "add", title, body);
+
         } else if (strcmp(input, "logout") == 0) {
             printf("Logging out...\n");
             break;
@@ -632,11 +669,7 @@ int main(int argc, char* argv[]){
         }
     }
     
-
-    if(writen(lissoc, (void*)"logout", 7) < 0){
-        perror("error sending logout request");
-        exit(-1);
-    }
+    checkreturnint(send(lissoc, (void*)"logout", CMDLEN, 0), "error sending logout req");
     close(lissoc);
 
     return 0;

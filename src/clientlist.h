@@ -16,7 +16,7 @@ typedef struct clientNode{
    int clientfd;
    int status; // handshake status code || logged in TBD
    unsigned char* AESkey;
-   unsigned char* shsec;
+   unsigned char* sessionKey;
    unsigned char* hashedpsw;
    struct clientNode* next;
 } ClientNode;
@@ -89,13 +89,13 @@ int addkey(ClientList* list, int fd, unsigned char* key, unsigned char* sec){
       perror("Failed to allocate memory for AESKey field");
       return -1;
    }
-   temp->shsec = malloc(SHARED_SECRET_LEN);
+   temp->sessionKey = malloc(SHARED_SECRET_LEN);
    if (!temp->AESkey) {
       perror("Failed to allocate memory for AESKey field");
       return -1;
    }
    temp->AESkey = key;
-   temp->shsec = sec;
+   temp->sessionKey = sec;
    return 0;
 }
 
