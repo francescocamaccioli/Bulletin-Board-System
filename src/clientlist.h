@@ -12,12 +12,19 @@
 #define AES_KEY_LEN EVP_MD_size(EVP_sha256())
 #define SHARED_SECRET_LEN 513
 
+typedef struct clientData{
+   char username[USERNAME_LEN];
+   char email[EMAIL_LEN];
+   unsigned char* hashedpsw;
+   unsigned char* salt;
+   bool islogged;
+} ClientData;
+
 typedef struct clientNode{
    int clientfd;
    int status; // handshake status code || logged in TBD
-   unsigned char* AESkey;
+   unsigned char* encrypted_data;
    unsigned char* sessionKey;
-   unsigned char* hashedpsw;
    struct clientNode* next;
 } ClientNode;
 
@@ -26,7 +33,7 @@ typedef struct clientList{
    ClientNode* tail;
 } ClientList;
 
-ClientList* createlist() {
+ClientList* create_clientlist() {
     ClientList* list = (ClientList*)malloc(sizeof(ClientList));
     if (!list) {
         perror("Failed to allocate memory for list");
@@ -37,7 +44,7 @@ ClientList* createlist() {
     return list;
 }
 
-int addclient(ClientList* list, int fd, int s){
+int addclient(ClientList* list, int fd, int s, unsigned char* key){
    if(list == NULL){
 		perror("list uninitialized.");
 		return -1;
@@ -50,7 +57,7 @@ int addclient(ClientList* list, int fd, int s){
    }
 	toadd->clientfd = fd;
    toadd->status = s;
-   toadd->AESkey = NULL;
+   toadd->sessionKey = key;
 	toadd->next = NULL;
 
 	if(list->head == NULL || list->tail == NULL){
@@ -61,42 +68,6 @@ int addclient(ClientList* list, int fd, int s){
 		list->tail = (ClientNode*)toadd;
 	}
 	return 0;
-}
-
-int addkey(ClientList* list, int fd, unsigned char* key, unsigned char* sec){
-   if (list == NULL){
-		perror("list uninitialized.");
-		return -1;
-	}
-
-   if (list->head == NULL){
-		perror("list is empty.");
-		return -1;
-	}
-
-   ClientNode* temp = list->head;
-   while (temp != NULL && temp->clientfd != fd){
-      temp = temp->next;
-   }
-
-   if(temp == NULL) {
-      perror("fd isn't in the list.");
-      return -1;
-   }
-
-   temp->AESkey = malloc(AES_KEY_LEN);
-   if (!temp->AESkey) {
-      perror("Failed to allocate memory for AESKey field");
-      return -1;
-   }
-   temp->sessionKey = malloc(SHARED_SECRET_LEN);
-   if (!temp->AESkey) {
-      perror("Failed to allocate memory for AESKey field");
-      return -1;
-   }
-   temp->AESkey = key;
-   temp->sessionKey = sec;
-   return 0;
 }
 
 int removeclient(ClientList* list, int fd){
