@@ -16,7 +16,7 @@
 #include <signal.h>
 
 #define BUF_SIZE 4096
-#define DATE_LEN 30
+#define TIMESTAMP_LEN 30
 #define SELECT_SIZE 128
 #define HMAC_SIZE 32
 #define IV_SIZE 16
@@ -30,6 +30,11 @@
 #define TITLE_LEN 50
 #define BODY_LEN 200
 
+typedef struct message_auth{
+    char timestamp[TIMESTAMP_LEN];
+    unsigned char hmac[HMAC_SIZE];
+} MessageAuth;
+
 void checkreturnint(int ret, char* msg){
    if(ret < 0){
       perror(msg);
@@ -42,6 +47,40 @@ void checkrnull(void* ret, char* msg){
       perror(msg);
       exit(EXIT_FAILURE);
    }
+}
+
+MessageAuth createMessageAuth(unsigned char* hmac, unsigned int hmac_len){
+    MessageAuth tosend;
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char timestamp[TIMESTAMP_LEN];
+    // timestamp format: YYYY-MM-DD HH:MM:SS
+    sprintf(timestamp, "%d-%02d-%02d %02d:%02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    memcpy(tosend.timestamp, timestamp, TIMESTAMP_LEN);
+    memcpy(tosend.hmac, hmac, hmac_len);
+    return tosend;
+}
+
+void checktimestamp(char* timestamp){
+    // obtain the current timestamp
+    time_t now = time(NULL);
+    struct tm tm_now = *localtime(&now);
+    char now_str[TIMESTAMP_LEN];
+    // timestamp format: YYYY-MM-DD HH:MM:SS
+    sprintf(now_str, "%d-%02d-%02d %02d:%02d:%02d", tm_now.tm_year + 1900, tm_now.tm_mon + 1, tm_now.tm_mday, tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
+
+    // compare the timestamps: the received timestamp must be within 2 minutes from the current timestamp
+    struct tm recv_tm;
+    strptime(timestamp, "%Y-%m-%d %H:%M:%S", &recv_tm);
+    time_t recv_time = mktime(&recv_tm);
+    time_t diff = difftime(now, recv_time);
+    if (diff > 120){
+        printf("Timestamps differ by more than 2 minutes, connection aborted\n");
+        exit(-1);
+    }
+    else{
+        printf("Timestamps differ by less than 2 minutes, connection accepted\n");
+    }
 }
 
 void compute_sha256(unsigned char *input, size_t input_len, unsigned char *hash) {
@@ -151,7 +190,7 @@ void iv_comm(int selind, unsigned char* iv, unsigned char* shared_secret, int sh
     // generate the IV HMAC
     unsigned char* iv_hmac;
     unsigned int iv_hmac_len;
-    iv_hmac = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+    iv_hmac = (unsigned char*)malloc(HMAC_SIZE);
     compute_hmac(iv, 16, shared_secret, shared_secret_len, iv_hmac, &iv_hmac_len);
 
     printf("IV HMAC: ");
@@ -164,11 +203,11 @@ void iv_comm(int selind, unsigned char* iv, unsigned char* shared_secret, int sh
     // printf("IV HMAC length: %d\n", iv_hmac_len);
     uint32_t iv_hmac_len_n = htonl(iv_hmac_len);
     checkreturnint(send(selind, (void*)&iv_hmac_len_n, sizeof(uint32_t), 0), "error sending IV HMAC length");
-    printf("IV HMAC length sent\n");
+    //printf("IV HMAC length sent\n");
 
     // send the IV HMAC to the client
     checkreturnint(send(selind, (void*)iv_hmac, iv_hmac_len, 0), "error sending IV HMAC");
-    printf("IV HMAC sent\n");
+    //printf("IV HMAC sent\n");
 }
 
 // function to receive IV and HMAC and check if they are correct
@@ -193,7 +232,7 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
         return -1;
     }
     long iv_hmac_len = ntohl(iv_hmac_len_n);
-    printf("iv_hmac_len: %d\n", iv_hmac_len);
+    printf("iv_hmac_len: %ld\n", iv_hmac_len);
     unsigned char* iv_hmac = malloc(iv_hmac_len);
     ret = recv(lissoc, (void*)iv_hmac, iv_hmac_len, 0);
     if (ret < 0){

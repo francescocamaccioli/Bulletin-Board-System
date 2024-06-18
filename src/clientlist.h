@@ -2,12 +2,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/x509.h>
-#include <openssl/dh.h>
-#include <openssl/hmac.h>
-#include <openssl/rand.h>
 
 #define AES_KEY_LEN EVP_MD_size(EVP_sha256())
 #define SHARED_SECRET_LEN 513
@@ -17,7 +11,7 @@ typedef struct clientData{
    char email[EMAIL_LEN];
    unsigned char* hashedpsw;
    unsigned char* salt;
-   bool islogged;
+   int islogged;
 } ClientData;
 
 typedef struct clientNode{

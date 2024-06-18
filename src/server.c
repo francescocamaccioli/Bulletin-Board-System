@@ -151,7 +151,7 @@ int main(int argc, char** argv){
                     //Operazione sul socket di connessione
                     //Qua faccio uno switch per verificare quale tipologia di dispositivo è. In questo modo posso differenziare le operazioni. Per fare ciò recupero le informazioni dal file
                     //Delle connessioni attive.
-                    printf("Initializing handshake with client #%d\n", selind);
+                    printf("Initializing handshake with client #%d...\n", selind);
                     char cmd[CMDLEN];
                     checkreturnint(recv(selind, (void*)&cmd, CMDLEN, 0), "recv hello error");                    
                     //printf("Received: %s\n", cmd);
@@ -336,14 +336,9 @@ int main(int argc, char** argv){
                     // generate the parameters for AES 256 CBC encryption
                     // computing SHA256 hash of the shared secret
                     unsigned char* AES_256_key;
-                    int AES_256_key_len;
                     EVP_MD_CTX* keyctx;
                     AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-                    keyctx = EVP_MD_CTX_new();
-                    EVP_DigestInit(keyctx, EVP_sha256());
-                    EVP_DigestUpdate(keyctx,(unsigned char*)shared_secret, shared_secret_len);
-                    EVP_DigestFinal(keyctx, AES_256_key, (unsigned int*)&AES_256_key_len);
-                    EVP_MD_CTX_free(keyctx);
+                    compute_sha256(shared_secret, shared_secret_len, AES_256_key);
 
                     // print the AES 256 key
                    /*  printf("AES 256 key: \n");
@@ -380,17 +375,9 @@ int main(int argc, char** argv){
                     for (int i = 0; i < 16; i++){
                         printf("%02x", iv[i]);
                     } */
-                    EVP_CIPHER_CTX* ctx_nonceenc;
-                    ctx_nonceenc = EVP_CIPHER_CTX_new();
-                    EVP_EncryptInit(ctx_nonceenc, EVP_aes_256_cbc(), AES_256_key, iv);
-                    unsigned char* enc_nonce;
+                    unsigned char* enc_nonce = (unsigned char*)malloc(48);
                     int enc_nonce_len;
-                    int outlen;
-                    enc_nonce = (unsigned char*)malloc(32 + 16);
-                    EVP_EncryptUpdate(ctx_nonceenc, enc_nonce, &outlen, (unsigned char*)nonce, 32);
-                    enc_nonce_len = outlen;
-                    EVP_EncryptFinal(ctx_nonceenc, enc_nonce + enc_nonce_len, &outlen);
-                    enc_nonce_len += outlen;
+                    encrypt_message(nonce, 32, AES_256_key, iv, enc_nonce, &enc_nonce_len);
 
                     // print the encrypted nonce
                     /* printf("Encrypted nonce: ");
@@ -426,7 +413,7 @@ int main(int argc, char** argv){
                     checkreturnint(recv(selind, (void*)received_iv, 16, 0), "error receiving IV");
 
                     // print the received IV
-                    /* printf("Received IV: ");
+/*                     printf("Received IV: ");
                     for (int i = 0; i < 16; i++){
                         printf("%02x", received_iv[i]);
                     }
@@ -436,35 +423,17 @@ int main(int argc, char** argv){
                     uint32_t enc_struct_len_n;
                     checkreturnint(recv(selind, (void*)&enc_struct_len_n, sizeof(uint32_t), 0),"error receiving encrypted structure length");
                     uint32_t enc_struct_len = ntohl(enc_struct_len_n);
-
                     // receive the encrypted structure
                     unsigned char* enc_struct;
                     enc_struct = (unsigned char*)malloc(enc_struct_len);
                     checkreturnint(recv(selind, (void*)enc_struct, enc_struct_len, 0), "error receiving encrypted structure");
-                    
-                    time_t t = time(NULL);
-                    struct tm tm = *localtime(&t);
-                    char timestamp[DATE_LEN];
-
-                    struct recv_data{
-                        char ts[DATE_LEN];
-                        unsigned char hmac[EVP_MAX_MD_SIZE];
-                    };
 
                     // decrypt the structure
-                    EVP_CIPHER_CTX* ctx_structdec;
-                    ctx_structdec = EVP_CIPHER_CTX_new();
-                    EVP_DecryptInit(ctx_structdec, EVP_aes_256_cbc(), AES_256_key, received_iv);
-                    unsigned char* dec_struct;
+                    unsigned char* dec_struct = malloc(sizeof(TIMESTAMP_LEN + HMAC_SIZE));
                     int dec_struct_len;
-                    dec_struct = (unsigned char*)malloc(enc_struct_len);
-                    EVP_DecryptUpdate(ctx_structdec, dec_struct, &outlen, enc_struct, enc_struct_len);
-                    dec_struct_len = outlen;
-                    EVP_DecryptFinal(ctx_structdec, dec_struct + dec_struct_len, &outlen);
-                    dec_struct_len += outlen;
-                    EVP_CIPHER_CTX_free(ctx_structdec);
+                    decrypt_message(enc_struct, enc_struct_len, AES_256_key, received_iv, dec_struct, &dec_struct_len);
 
-                    struct recv_data recv_auth;
+                    MessageAuth recv_auth;
                     memcpy(&recv_auth, dec_struct, sizeof(recv_auth));
 
                     // print the decrypted structure
@@ -476,25 +445,7 @@ int main(int argc, char** argv){
                     }
                     printf("\n"); */
 
-                    // obtain the current timestamp
-                    time_t now = time(NULL);
-                    struct tm tm_now = *localtime(&now);
-                    char now_str[DATE_LEN];
-                    // timestamp format: YYYY-MM-DD HH:MM:SS
-                    sprintf(now_str, "%d-%02d-%02d %02d:%02d:%02d", tm_now.tm_year + 1900, tm_now.tm_mon + 1, tm_now.tm_mday, tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
-
-                    // compare the timestamps: the received timestamp (recv_auth.ts) must be within 2 minutes from the current timestamp
-                    struct tm recv_tm;
-                    strptime(recv_auth.ts, "%Y-%m-%d %H:%M:%S", &recv_tm);
-                    time_t recv_time = mktime(&recv_tm);
-                    time_t diff = difftime(now, recv_time);
-                    if (diff > 120){
-                        printf("Timestamps differ by more than 2 minutes, connection aborted\n");
-                        exit(-1);
-                    }
-                    else{
-                        printf("Timestamps differ by less than 2 minutes, connection accepted\n");
-                    }
+                    checktimestamp(recv_auth.timestamp);
 
                     // compute the HMAC of the nonce by using the function
                     unsigned char* computed_hmac_nonce;
@@ -529,22 +480,27 @@ int main(int argc, char** argv){
                         if (strcmp(cmd, "register") == 0) {
                             printf("Register request received\n");
                             unsigned char* reg_iv = (unsigned char*)malloc(IV_SIZE);
-                            unsigned char* res_hmac = (unsigned char*)malloc(HMAC_SIZE);
                             receiveIVHMAC(selind, reg_iv, shared_secret, shared_secret_len);
-                            uint32_t ciphertext_len;
-                            checkreturnint(recv(selind, (void*)&ciphertext_len, sizeof(uint32_t), 0), "error receiving ct len");
-                            unsigned char* ciphertext = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                            // receiving ciphertext
+                            uint32_t ciphertext_len_n;
+                            checkreturnint(recv(selind, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error receiving ct len");
+                            long ciphertext_len = ntohl(ciphertext_len_n);
+                            printf("Ciphertext length: %ld\n", ciphertext_len);
+                            unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
                             checkreturnint(recv(selind, (void*) ciphertext, ciphertext_len, 0), "error receiving ct");
-                            unsigned char* plaintext = malloc(BUF_SIZE);
+
+                            char* plaintext = malloc(BUF_SIZE);
                             int plaintext_len;
-                            decrypt_message(ciphertext, ciphertext_len, shared_secret, reg_iv, plaintext, &plaintext_len);
-                            printf("plaintext_len = %d\n", plaintext_len);
-                            printf("decrypted message: %s\n", plaintext);
-                            printf("decrypted message: ");
-                            for (int i = 0; i < plaintext_len; i++) {
-                                printf("%02x", plaintext[i]);
-                            }
-                            printf("\n");
+                            decrypt_message(ciphertext, ciphertext_len, AES_256_key, reg_iv, (unsigned char*)plaintext, &plaintext_len);
+                            char* username = strtok(plaintext, ",");
+                            char* email = strtok(NULL, ",");
+                            char* hashedpsw = strtok(NULL, "\0");
+                            // printing the parsed string
+                            printf("Username: %s\n", username);
+                            printf("Email: %s\n", email);
+                            printf("hashed password: %s\n", hashedpsw);
+
+/* 
                             // save the parsed string in a csv file with the fields divided by commas
                             FILE* csv_file = fopen("users.csv", "a");
                             if (!csv_file) {
@@ -553,6 +509,7 @@ int main(int argc, char** argv){
                             }
                             fprintf(csv_file, "%s\n", plaintext);
                             fclose(csv_file);
+*/
 
                             continue;
                         } else if (strcmp(cmd, "login") == 0) {

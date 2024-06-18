@@ -55,18 +55,11 @@ int main(int argc, char* argv[]){
     // receiving server certificate from socket
     X509* server_cert;
     uint32_t cert_len;
-    ret = recv(lissoc, (void*)&cert_len, sizeof(uint32_t), 0);
-    if (ret < 0){
-        perror("error receiving server certificate length");
-        exit(-1);
-    }
+    checkreturnint(recv(lissoc, (void*)&cert_len, sizeof(uint32_t), 0), "error receiving server cert");
     long cert_len_long = ntohl(cert_len);
     unsigned char* cert_buffer = (unsigned char*)malloc(cert_len_long);
-    ret = recv(lissoc, (void*)cert_buffer, cert_len_long, 0);
-    if (ret < 0){
-        perror("error receiving server certificate");
-        exit(-1);
-    }
+    checkreturnint(recv(lissoc, (void*)cert_buffer, cert_len_long, 0), "error receiving server certificate");
+
     // printing serialized certificate
     /*
     printf("Serialized certificate: \n");
@@ -77,23 +70,15 @@ int main(int argc, char* argv[]){
     */
     // deserialize certificate using d2i_X509
     server_cert = d2i_X509(NULL, (const unsigned char**)&cert_buffer, cert_len_long);
-    if (!server_cert){
-        perror("error deserializing server certificate");
-        exit(-1);
-    }
+    checkrnull(server_cert, "error deserializing server certificate");
+
     // extracting RSA public key from certificate
     // puts("Extracting RSA public key from certificate");
     EVP_PKEY* server_pubkey = X509_get_pubkey(server_cert);
-    if (!server_pubkey){
-        perror("error extracting public key from certificate");
-        exit(-1);
-    }
+    checkrnull(server_pubkey, "error extracting public key from certificate");
     // printing public key information
     RSA* rsa_pubkey = EVP_PKEY_get1_RSA(server_pubkey);
-    if (!rsa_pubkey){
-        perror("error extracting RSA public key");
-        exit(-1);
-    }
+    checkrnull(rsa_pubkey, "error extracting RSA public key");
     /*
     printf("RSA public key: \n");
     printf("Modulus: %s\n", BN_bn2hex(RSA_get0_n(rsa_pubkey)));
@@ -111,11 +96,7 @@ int main(int argc, char* argv[]){
 
     // generating the client public-private key pair
     EVP_PKEY_CTX* pkDHctx = EVP_PKEY_CTX_new(dh_params, NULL);
-    if (!pkDHctx){
-        perror("Failed to create EVP_PKEY_CTX");
-        EVP_PKEY_free(dh_params);
-        return 1;
-    }
+    checkrnull(pkDHctx, "error creating EVP_PKEY_CTX");
     EVP_PKEY* client_keypair = NULL;
     ret = EVP_PKEY_keygen_init(pkDHctx);
     if (ret <= 0){
@@ -215,6 +196,7 @@ int main(int argc, char* argv[]){
         free(pub_key_buf);
         return 1;
     }
+
     uint32_t server_pub_key_len = ntohl(server_pub_key_len_n);
     unsigned char* server_pub_key_buf = (unsigned char*)malloc(server_pub_key_len);
     ret = recv(lissoc, (void*)server_pub_key_buf, server_pub_key_len, 0);
@@ -236,6 +218,7 @@ int main(int argc, char* argv[]){
         perror("error receiving signature length");
         exit(-1);
     }
+
     long sign_len_n = ntohl(sign_len);
     unsigned char* pksign = (unsigned char*)malloc(sign_len_n);
     ret = recv(lissoc, (void*)pksign, sign_len_n, 0);
@@ -243,6 +226,7 @@ int main(int argc, char* argv[]){
         perror("error receiving signature");
         exit(-1);
     }
+
     // verify the signature
     EVP_MD_CTX* ctx_verify;
     ctx_verify = EVP_MD_CTX_new();
@@ -254,7 +238,7 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
     else{
-        printf("signature verified, parameters accepted\n");
+        printf("Signature verified, parameters accepted\n");
     }
     EVP_MD_CTX_free(ctx_verify);
 
@@ -283,8 +267,7 @@ int main(int argc, char* argv[]){
 
     shared_secret = (unsigned char*)malloc(shared_secret_len);
     EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
-
-
+    printf("shared secret len: %zu\n" , shared_secret_len);
     // Print the shared secret
 /*  printf("Shared secret: \n");
     for (int i = 0; i < shared_secret_len; i++) {
@@ -362,16 +345,10 @@ int main(int argc, char* argv[]){
     printf("\n");
  */
     // computing the HMAC of the nonce
-    HMAC_CTX* hmac_ctx;
-    hmac_ctx = HMAC_CTX_new();
-
-    HMAC_Init(hmac_ctx, shared_secret, shared_secret_len, EVP_sha256());
-    HMAC_Update(hmac_ctx, decrypted_nonce, decrypted_nonce_len);
-    unsigned char* hmac;
+    unsigned char* hmac = (unsigned char*)malloc(HMAC_SIZE);
     unsigned int hmac_len;
-    hmac = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-    HMAC_Final(hmac_ctx, hmac, &hmac_len);
-    HMAC_CTX_free(hmac_ctx);
+    compute_hmac(decrypted_nonce, decrypted_nonce_len, shared_secret, shared_secret_len, hmac, &hmac_len);
+
 /* 
     // print the HMAC
     printf("\n");
@@ -381,23 +358,17 @@ int main(int argc, char* argv[]){
     }
     printf("\n");
      */
-    // build a structure to send the HMAC and the timestamp
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-    char timestamp[DATE_LEN];
-    // timestamp format: YYYY-MM-DD HH:MM:SS
-    sprintf(timestamp, "%d-%02d-%02d %02d:%02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    uint32_t timestamp_len = htonl(DATE_LEN);
-    struct srvsend{
-        char timestamp[DATE_LEN];
-        unsigned char hmac[EVP_MAX_MD_SIZE];
-    };
-    struct srvsend tosend;
-    memcpy(tosend.timestamp, timestamp, DATE_LEN);
-    memcpy(tosend.hmac, hmac, hmac_len);
-    // generate the IV for AES encryption
+
+    // generating the IV for AES encryption
     unsigned char iv2 [16];
     RAND_bytes(iv2, 16);
+    // sending the IV
+    ret = send(lissoc, (void*)iv2, 16, 0);
+    if (ret < 0){
+        perror("error sending IV");
+        exit(-1);
+    }
+
 /* 
     // print the IV 
     printf("IV2: \n");
@@ -406,24 +377,8 @@ int main(int argc, char* argv[]){
     }
     printf("\n");
  */
-    // encrypt the structure
-    EVP_CIPHER_CTX* ctx_encrypt;
-    ctx_encrypt = EVP_CIPHER_CTX_new();
-    EVP_CIPHER_CTX_init(ctx_encrypt);
-    unsigned char* encrypted_struct;
-    int encrypted_len;
-    int outlen2;
-    long struct_len = DATE_LEN + hmac_len;
-    encrypted_struct = (unsigned char*)malloc(struct_len);
-    EVP_EncryptInit(ctx_encrypt, EVP_aes_256_cbc(), AES_256_key, iv2);
-    EVP_EncryptUpdate(ctx_encrypt, encrypted_struct, &outlen2, (unsigned char*)&tosend, struct_len);
-    encrypted_len = outlen2;
-    int res2 = EVP_EncryptFinal(ctx_encrypt, encrypted_struct + encrypted_len, &outlen2);
-    if (res2 == 0){
-        perror("error encrypting structure");
-        exit(-1);
-    }
-    encrypted_len += outlen2;
+    
+
 /*     
     // print the encrypted structure
     printf("Encrypted structure: \n");
@@ -432,29 +387,22 @@ int main(int argc, char* argv[]){
     }
     printf("\n");
  */
-    // send the IV
-    ret = send(lissoc, (void*)iv2, 16, 0);
-    if (ret < 0){
-        perror("error sending IV");
-        exit(-1);
-    }
+    // creating structure to hold nonce hmac and timestamp
+    MessageAuth nonceauth = createMessageAuth(hmac, hmac_len);
+    // encrypting the structure
+    unsigned char* encrypted_auth = (unsigned char*)malloc(sizeof(MessageAuth));
+    int encrypted_len;
+    encrypt_message((unsigned char*)&nonceauth, sizeof(MessageAuth), AES_256_key, iv2, encrypted_auth, &encrypted_len);
     // send the encrypted structure
     uint32_t encrypted_len_n = htonl(encrypted_len);
-    ret = send(lissoc, (void*)&encrypted_len_n, sizeof(uint32_t), 0);
-    if (ret < 0){
-        perror("error sending encrypted structure length");
-        exit(-1);
-    }
-    ret = send(lissoc, (void*)encrypted_struct, encrypted_len, 0);
-    if (ret < 0){
-        perror("error sending encrypted structure");
-        exit(-1);
-    }
+    checkreturnint(send(lissoc, (void*)&encrypted_len_n, sizeof(uint32_t), 0), "error sending encrypted structure length");
+    checkreturnint(send(lissoc, (void*)encrypted_auth, encrypted_len, 0), "error sending encrypted structure");
     puts("Handshake successfully completed!");
     
+    // Client's command parsing loop
     char input[BUF_SIZE];
     help();
-    // main command parsing loop
+
     while (1) {
         printf("Enter command: \n> ");
         if (fgets(input, BUF_SIZE, stdin) == NULL) {
@@ -473,7 +421,6 @@ int main(int argc, char* argv[]){
         }
 
         if (strcmp(input, "register") == 0) {
-            checkreturnint(send(lissoc, (void*)"register", CMDLEN, 0), "error sending register");
             char* email = arg;
             char* username = strtok(NULL, " ");
             char* password = strtok(NULL, " ");
@@ -486,37 +433,66 @@ int main(int argc, char* argv[]){
                 puts("Too many arguments.");
                 continue;
             }
+
+            puts("Sending register to server");
+            checkreturnint(send(lissoc, (void*)"register", CMDLEN, 0), "error sending register");
+
             unsigned char* pwd_hash = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
             if(!pwd_hash){
                 perror("memory finished");
                 exit(EXIT_FAILURE);
             }
             compute_sha256((unsigned char*)password, strlen(password), pwd_hash);
-            printf("Password Hash: %s", pwd_hash);
-            int total_len = strlen(email)+strlen(username)+strlen(password);
+            puts("hashed password:");
+            for (int i = 0; i < 32; i++){
+                printf("%02x", pwd_hash[i]);
+            }
+            puts("");
+            
+            char pwd_hash_hex[65];
+            for (int i = 0; i < 32; ++i) {
+                sprintf(&pwd_hash_hex[i*2], "%02x", pwd_hash[i]);
+            }
+            pwd_hash_hex[64] = 0;
+            int total_len = strlen(email)+strlen(username)+strlen(pwd_hash_hex)+3;
             char* tosend = malloc(BUF_SIZE);
             if (!tosend){
                 perror("Error creating packet..");
                 continue;
             };
-            snprintf(tosend, total_len+3, "%s,%s,%s", email, username, pwd_hash);
+            // build a string tosend with email, username and password hash
+            snprintf(tosend, total_len+2, "%s,%s,%s", email, username, pwd_hash_hex);
             printf("tosend: %s\n", tosend);
-            unsigned char* hmac_reg = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
-            unsigned int hmac_reg_len;
-            // computing HMAC of message and appending it at the end of it
-            compute_hmac((unsigned char*)tosend, strlen(tosend), shared_secret, shared_secret_len, hmac_reg, &hmac_reg_len);
-            memcpy(tosend + strlen(tosend), hmac_reg, SHA256_DIGEST_LENGTH);
+            
+            
+            // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
             iv_comm(lissoc, iv, shared_secret, shared_secret_len);
             // encrypting with AES CBC mode
-            unsigned char* ciphertext = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-            int ciphertext_len;
-            encrypt_message((unsigned char*)tosend, strlen(tosend), shared_secret, iv, ciphertext, &ciphertext_len);
-            puts("Sending register to server");
-            checkreturnint(send(lissoc, (void*)&ciphertext_len, sizeof(uint32_t), 0), "error sending ctlen");
+            unsigned char* ciphertext = (unsigned char*)malloc(sizeof(tosend) + 16);
+            long ciphertext_len=0;
+            encrypt_message((unsigned char*)tosend, strlen(tosend), AES_256_key, iv, ciphertext, &ciphertext_len);
+            uint32_t ciphertext_len_n = htonl(ciphertext_len);
+            printf("ciphertext_len: %ld\n", ciphertext_len);
+            checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
             checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
+
+            // computing HMAC over cyphertext
+            unsigned char* hmac_reg = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+            unsigned int hmac_reg_len;
+            compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_reg, &hmac_reg_len);
+
+            MessageAuth regauth = createMessageAuth(hmac_reg, hmac_reg_len);
+            // encrypting the structure
+            unsigned char* encrypted_regauth = (unsigned char*)malloc(sizeof(MessageAuth));
+            int encrypted_regauth_len;
+            encrypt_message((unsigned char*)&regauth, sizeof(MessageAuth), AES_256_key, iv2, encrypted_regauth, &encrypted_regauth_len);
+            // send the encrypted structure
+            uint32_t encrypted_regauth_len_n = htonl(encrypted_regauth_len);
+            checkreturnint(send(lissoc, (void*)&encrypted_regauth_len_n, sizeof(uint32_t), 0), "error sending encrypted structure length");
+            checkreturnint(send(lissoc, (void*)encrypted_regauth, encrypted_len, 0), "error sending encrypted structure");
             
-            
+
         } else if (strcmp(input, "login") == 0) {
             checkreturnint(send(lissoc, (void*)"login", CMDLEN, 0), "error sending login");
             char* username = arg;
