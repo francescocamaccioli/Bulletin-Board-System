@@ -49,6 +49,43 @@ void checkrnull(void* ret, char* msg){
    }
 }
 
+// function to encrypt a message using AES 256 ECB
+void encrypt_message_AES256ECB(unsigned char* message, int message_len, unsigned char* key, unsigned char* ciphertext, int* ciphertext_len){
+    EVP_CIPHER_CTX* ctx;
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit(ctx, EVP_aes_256_ecb(), key, NULL);
+    int outlen;
+    EVP_EncryptUpdate(ctx, ciphertext, &outlen, message, message_len);
+    *ciphertext_len = outlen;
+    EVP_EncryptFinal(ctx, ciphertext + outlen, &outlen);
+    *ciphertext_len += outlen;
+    EVP_CIPHER_CTX_free(ctx);
+
+}
+
+// function to decrypt a message using AES 256 ECB
+void decrypt_message_AES256ECB(unsigned char* ciphertext, int ciphertext_len, unsigned char* key, unsigned char* plaintext, int* plaintext_len){
+    EVP_CIPHER_CTX* ctx;
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit(ctx, EVP_aes_256_ecb(), key, NULL);
+    int outlen;
+    EVP_DecryptUpdate(ctx, plaintext, &outlen, ciphertext, ciphertext_len);
+    *plaintext_len = outlen;
+    EVP_DecryptFinal(ctx, plaintext + outlen, &outlen);
+    *plaintext_len += outlen;
+    EVP_CIPHER_CTX_free(ctx);
+}
+
+// create timestamp string
+char* create_timestamp(){
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char* timestamp = (char*)malloc(TIMESTAMP_LEN);
+    // timestamp format: YYYY-MM-DD HH:MM:SS
+    sprintf(timestamp, "%d-%02d-%02d %02d:%02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return timestamp;
+}
+
 MessageAuth createMessageAuth(unsigned char* hmac, unsigned int hmac_len){
     MessageAuth tosend;
     time_t t = time(NULL);
@@ -61,7 +98,7 @@ MessageAuth createMessageAuth(unsigned char* hmac, unsigned int hmac_len){
     return tosend;
 }
 
-void checktimestamp(char* timestamp){
+int checktimestamp(char* timestamp){
     // obtain the current timestamp
     time_t now = time(NULL);
     struct tm tm_now = *localtime(&now);
@@ -74,12 +111,13 @@ void checktimestamp(char* timestamp){
     strptime(timestamp, "%Y-%m-%d %H:%M:%S", &recv_tm);
     time_t recv_time = mktime(&recv_tm);
     time_t diff = difftime(now, recv_time);
-    if (diff > 120){
-        printf("Timestamps differ by more than 2 minutes, connection aborted\n");
-        exit(-1);
+    if (diff > 60){
+        printf("Timestamps differ by more than 1 minute, connection aborted\n");
+        return 1;
     }
     else{
-        printf("Timestamps differ by less than 2 minutes, connection accepted\n");
+        printf("Timestamps differ by less than 1 minute, connection accepted\n");
+        return 0;
     }
 }
 

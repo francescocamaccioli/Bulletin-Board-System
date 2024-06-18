@@ -494,11 +494,64 @@ int main(int argc, char** argv){
                             decrypt_message(ciphertext, ciphertext_len, AES_256_key, reg_iv, (unsigned char*)plaintext, &plaintext_len);
                             char* username = strtok(plaintext, ",");
                             char* email = strtok(NULL, ",");
-                            char* hashedpsw = strtok(NULL, "\0");
+                            char* hashedpsw = strtok(NULL, ",");
+                            char* recv_timestamp = strtok(NULL, "\0");
                             // printing the parsed string
                             printf("Username: %s\n", username);
                             printf("Email: %s\n", email);
                             printf("hashed password: %s\n", hashedpsw);
+                            printf("Timestamp: %s\n", recv_timestamp);
+
+                            int check = checktimestamp(recv_timestamp);
+
+                            // receive HMAC length
+                            uint32_t hmac_len_n;
+                            checkreturnint(recv(selind, (void*)&hmac_len_n, sizeof(uint32_t), 0), "error receiving HMAC length");
+                            long hmac_len = ntohl(hmac_len_n);
+                            unsigned char* recv_hmac = (unsigned char*)malloc(hmac_len);
+                            checkreturnint(recv(selind, (void*)recv_hmac, hmac_len, 0), "error receiving HMAC");
+
+                            // compute HMAC of the ciphertext
+                            unsigned char* computed_hmac;
+                            unsigned int computed_hmac_len;
+                            computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+                            compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
+                            
+                            int compare = CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len);
+                            // compare the HMACs
+                            
+                            if (compare == 0 && check == 1) {
+                                printf("HMACs match, timestamp within range, registration successful\n");
+                                // read the server private key from a file
+                                FILE* rsa_priv_key_file = fopen("server_privkey.pem", "r");
+                                if (!rsa_priv_key_file) {
+                                    perror("Failed to open RSA private key file");
+                                    exit(-1);
+                                }
+                                EVP_PKEY* rsa_priv_key = PEM_read_PrivateKey(rsa_priv_key_file, NULL, NULL, "TaylorSwift13");
+                                if (!rsa_priv_key) {
+                                    perror("Failed to read RSA private key");
+                                    exit(-1);
+                                }
+                                fclose(rsa_priv_key_file);
+                                // derive the AES 256 key from the RSA private key by computing its SHA256 hash
+                                unsigned char* AES_256_key;
+                                AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                                compute_sha256((unsigned char*)rsa_priv_key, sizeof(rsa_priv_key), AES_256_key);
+                                // compute the encryption of the password hash with the derived AES key 
+                                unsigned char* enc_psw = malloc(sizeof(hashedpsw)+16);
+                                int enc_psw_len;
+                                encrypt_message_AES256ECB((unsigned char*)hashedpsw, sizeof(hashedpsw), AES_256_key, enc_psw, &enc_psw_len);
+                                // save encrypted password in structure
+
+                                
+                            } else {
+                                printf("Error, registration failed\n");
+                            }
+
+
+
+
 
 /* 
                             // save the parsed string in a csv file with the fields divided by commas

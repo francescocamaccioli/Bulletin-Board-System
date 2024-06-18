@@ -454,14 +454,18 @@ int main(int argc, char* argv[]){
                 sprintf(&pwd_hash_hex[i*2], "%02x", pwd_hash[i]);
             }
             pwd_hash_hex[64] = 0;
-            int total_len = strlen(email)+strlen(username)+strlen(pwd_hash_hex)+3;
+            //generate timestamp string with create_timestamp
+            char* reg_timestamp = create_timestamp();
+            printf("timestamp: %s\n", reg_timestamp);
+            int total_len = strlen(email)+strlen(username)+strlen(pwd_hash_hex)+strlen(reg_timestamp)+4;
             char* tosend = malloc(BUF_SIZE);
             if (!tosend){
                 perror("Error creating packet..");
                 continue;
             };
-            // build a string tosend with email, username and password hash
-            snprintf(tosend, total_len+2, "%s,%s,%s", email, username, pwd_hash_hex);
+
+            // build a string tosend with email, username, password hash and timestamp
+            snprintf(tosend, total_len, "%s,%s,%s,%s", email, username, pwd_hash_hex, reg_timestamp);
             printf("tosend: %s\n", tosend);
             
             
@@ -482,15 +486,11 @@ int main(int argc, char* argv[]){
             unsigned int hmac_reg_len;
             compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_reg, &hmac_reg_len);
 
-            MessageAuth regauth = createMessageAuth(hmac_reg, hmac_reg_len);
-            // encrypting the structure
-            unsigned char* encrypted_regauth = (unsigned char*)malloc(sizeof(MessageAuth));
-            int encrypted_regauth_len;
-            encrypt_message((unsigned char*)&regauth, sizeof(MessageAuth), AES_256_key, iv2, encrypted_regauth, &encrypted_regauth_len);
-            // send the encrypted structure
-            uint32_t encrypted_regauth_len_n = htonl(encrypted_regauth_len);
-            checkreturnint(send(lissoc, (void*)&encrypted_regauth_len_n, sizeof(uint32_t), 0), "error sending encrypted structure length");
-            checkreturnint(send(lissoc, (void*)encrypted_regauth, encrypted_len, 0), "error sending encrypted structure");
+            // sending HMAC
+            uint32_t hmac_reg_len_n = htonl(hmac_reg_len);
+            checkreturnint(send(lissoc, (void*)&hmac_reg_len_n, sizeof(uint32_t), 0), "error sending");
+            checkreturnint(send(lissoc, hmac_reg, hmac_reg_len, 0), "error sending");
+            puts("Registering...");
             
 
         } else if (strcmp(input, "login") == 0) {
