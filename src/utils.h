@@ -20,6 +20,7 @@
 #define SELECT_SIZE 128
 #define HMAC_SIZE 32
 #define IV_SIZE 16
+#define HASH_SIZE 32
 #define SALT_LEN 16
 #define CMDLEN 10
 // users parameters lenghts
@@ -161,6 +162,51 @@ void compute_sha256(unsigned char *input, size_t input_len, unsigned char *hash)
 
     unsigned int hash_len;
     if (EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1) {
+        perror("EVP_DigestFinal_ex failed");
+        EVP_MD_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+    EVP_MD_CTX_free(ctx);
+}
+
+void compute_sha256_salted(unsigned char *input, size_t input_len, char * hash, char* salt) {
+    // generating 128 bits salt to avoid rainbowtable attacks
+    if (!RAND_bytes((unsigned char*) salt, SALT_LEN)) {
+        perror("RAND_bytes failed");
+        exit(EXIT_FAILURE);
+    }
+ 
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        perror("EVP_MD_CTX_new failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if(!hash){
+        perror("need to allocate hash buffer first");
+        exit(EXIT_FAILURE);
+    }
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
+        perror("EVP_DigestInit_ex failed");
+        EVP_MD_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+
+    if (EVP_DigestUpdate(ctx, input, input_len) != 1) {
+        perror("EVP_DigestUpdate failed");
+        EVP_MD_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+
+    if (EVP_DigestUpdate(ctx, salt, SALT_LEN) != 1) {
+        perror("EVP_DigestUpdate failed");
+        EVP_MD_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+
+    unsigned int hash_len;
+    if (EVP_DigestFinal_ex(ctx,(unsigned char*) hash, &hash_len) != 1) {
         perror("EVP_DigestFinal_ex failed");
         EVP_MD_CTX_free(ctx);
         exit(EXIT_FAILURE);

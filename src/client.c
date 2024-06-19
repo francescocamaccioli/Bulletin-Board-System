@@ -390,7 +390,7 @@ int main(int argc, char* argv[]){
     // creating structure to hold nonce hmac and timestamp
     MessageAuth nonceauth = createMessageAuth(hmac, hmac_len);
     // encrypting the structure
-    unsigned char* encrypted_auth = (unsigned char*)malloc(sizeof(MessageAuth));
+    unsigned char* encrypted_auth = (unsigned char*)malloc(sizeof(MessageAuth)+16);
     int encrypted_len;
     encrypt_message((unsigned char*)&nonceauth, sizeof(MessageAuth), AES_256_key, iv2, encrypted_auth, &encrypted_len);
     // send the encrypted structure
@@ -437,17 +437,12 @@ int main(int argc, char* argv[]){
             puts("Sending register to server");
             checkreturnint(send(lissoc, (void*)"register", CMDLEN, 0), "error sending register");
 
-            unsigned char* pwd_hash = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+            unsigned char* pwd_hash = (unsigned char*)malloc(HASH_SIZE);
             if(!pwd_hash){
                 perror("memory finished");
                 exit(EXIT_FAILURE);
             }
             compute_sha256((unsigned char*)password, strlen(password), pwd_hash);
-            puts("hashed password:");
-            for (int i = 0; i < 32; i++){
-                printf("%02x", pwd_hash[i]);
-            }
-            puts("");
             
             char pwd_hash_hex[65];
             for (int i = 0; i < 32; ++i) {
@@ -458,7 +453,7 @@ int main(int argc, char* argv[]){
             char* reg_timestamp = create_timestamp();
             printf("timestamp: %s\n", reg_timestamp);
             int total_len = strlen(email)+strlen(username)+strlen(pwd_hash_hex)+strlen(reg_timestamp)+4;
-            char* tosend = malloc(BUF_SIZE);
+            char* tosend = calloc(total_len, sizeof(char));
             if (!tosend){
                 perror("Error creating packet..");
                 continue;
@@ -467,17 +462,24 @@ int main(int argc, char* argv[]){
             // build a string tosend with email, username, password hash and timestamp
             snprintf(tosend, total_len, "%s,%s,%s,%s", email, username, pwd_hash_hex, reg_timestamp);
             printf("tosend: %s\n", tosend);
-            
+            printf("tosend lenght: %ld\n", strlen(tosend));
             
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
             iv_comm(lissoc, iv, shared_secret, shared_secret_len);
             // encrypting with AES CBC mode
             unsigned char* ciphertext = (unsigned char*)malloc(sizeof(tosend) + 16);
-            long ciphertext_len=0;
+            int ciphertext_len;
             encrypt_message((unsigned char*)tosend, strlen(tosend), AES_256_key, iv, ciphertext, &ciphertext_len);
             uint32_t ciphertext_len_n = htonl(ciphertext_len);
-            printf("ciphertext_len: %ld\n", ciphertext_len);
+            printf("Ciphertext length: %d\n", ciphertext_len);
+            // print ciphertext as hex
+            printf("Ciphertext: ");
+            for (int i = 0; i < ciphertext_len; i++){
+                printf("%02x", ciphertext[i]);
+            }
+            printf("\n");
+
             checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
             checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
 
@@ -485,16 +487,29 @@ int main(int argc, char* argv[]){
             unsigned char* hmac_reg = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
             unsigned int hmac_reg_len;
             compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_reg, &hmac_reg_len);
-
             // sending HMAC
             uint32_t hmac_reg_len_n = htonl(hmac_reg_len);
-            checkreturnint(send(lissoc, (void*)&hmac_reg_len_n, sizeof(uint32_t), 0), "error sending");
-            checkreturnint(send(lissoc, hmac_reg, hmac_reg_len, 0), "error sending");
-            puts("Registering...");
-            
+            printf("HMAC length: %d\n", hmac_reg_len);
+            printf("HMAC: ");
+            for (int i = 0; i < hmac_reg_len; i++){
+                printf("%02x", hmac_reg[i]);
+            }
+            printf("\n");
+            checkreturnint(send(lissoc, (void*)&hmac_reg_len_n, sizeof(uint32_t), 0), "error sending hmac len");
+            checkreturnint(send(lissoc, hmac_reg, hmac_reg_len, 0), "error sending hmac");
+            // receiving "ok" from server
+            char* response = (char*)malloc(CMDLEN);
+            puts("receiving response");
+            checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
+            if (strcmp(response, "ok") == 0){
+                puts("Registration successful!");
+            } else if(strcmp(response, "exists") == 0){
+                puts("Username already used, try again.");
+            } else {
+                puts("Registration failed, try again.");
+            }
 
-        } else if (strcmp(input, "login") == 0) {
-            checkreturnint(send(lissoc, (void*)"login", CMDLEN, 0), "error sending login");
+        } else if (strcmp(input, "login") == 0) {            
             char* username = arg;
             char* password = strtok(NULL, " ");
             char* rest = strtok(NULL, "/0");
@@ -506,11 +521,12 @@ int main(int argc, char* argv[]){
                 puts("Too many arguments.");
                 continue;
             }
-            unsigned char* pwd_hash = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+            unsigned char* pwd_hash = (unsigned char*)malloc(HASH_SIZE);
             if(!pwd_hash){
                 perror("memory finished");
                 exit(EXIT_FAILURE);
             }
+            checkreturnint(send(lissoc, (void*)"login", CMDLEN, 0), "error sending login");
             compute_sha256((unsigned char*)password, strlen(password), pwd_hash);
             int total_len = strlen(username)+strlen(password);
             char* tosend = malloc(total_len+2);

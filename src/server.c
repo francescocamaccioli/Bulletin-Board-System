@@ -4,22 +4,8 @@
 
 int lissoc = 0, connectsoc = 0, messagecount = 0;
 
-
-
 // function to generate a message signature using the server private key
-void sign_message(unsigned char* message, int message_len, unsigned char* signature, unsigned int* signature_len){
-    FILE* rsa_priv_key_file = fopen("server_privkey.pem", "r");
-    if (!rsa_priv_key_file) {
-        perror("Failed to open RSA private key file");
-        exit(-1);
-    }
-    EVP_PKEY* rsa_priv_key = PEM_read_PrivateKey(rsa_priv_key_file, NULL, NULL, "TaylorSwift13");
-    if (!rsa_priv_key) {
-        perror("Failed to read RSA private key");
-        exit(-1);
-    }
-    fclose(rsa_priv_key_file);
-
+void sign_message(EVP_PKEY* rsa_priv_key , unsigned char* message, int message_len, unsigned char* signature, unsigned int* signature_len){
     EVP_MD_CTX* sign_ctx;
     sign_ctx = EVP_MD_CTX_new();
     EVP_SignInit(sign_ctx, EVP_sha256());
@@ -137,7 +123,7 @@ int main(int argc, char** argv){
                     // commands
                 }
                 else if(selind == lissoc){ //Pronto il codice di ascolto: nuovo dispositivo connesso
-                    int len = sizeof(server_addr);
+                    unsigned int len = sizeof(server_addr);
                     connectsoc = accept(lissoc, (struct sockaddr*) &server_addr, &len);
                     if(connectsoc == -1){
                         perror("accept error");
@@ -307,7 +293,7 @@ int main(int argc, char** argv){
                     signature = (unsigned char*)malloc(EVP_PKEY_size(rsa_priv_key));
 
                     // sign public key with function
-                    sign_message(srv_pkey_buf, srv_pub_key_len, signature, &signature_len);
+                    sign_message(rsa_priv_key, srv_pkey_buf, srv_pub_key_len, signature, &signature_len);
 
                     // send signature length to the client
                     uint32_t signature_len_n = htonl(signature_len);
@@ -323,6 +309,7 @@ int main(int argc, char** argv){
 
                     size_t shared_secret_len;
                     EVP_PKEY_derive(ctx_drv, NULL, &shared_secret_len);
+                    printf("Shared secret length: %ld\n", shared_secret_len);
 
                     shared_secret = (unsigned char*)malloc(shared_secret_len);
                     EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
@@ -375,7 +362,7 @@ int main(int argc, char** argv){
                     for (int i = 0; i < 16; i++){
                         printf("%02x", iv[i]);
                     } */
-                    unsigned char* enc_nonce = (unsigned char*)malloc(48);
+                    unsigned char* enc_nonce = (unsigned char*)malloc(50);
                     int enc_nonce_len;
                     encrypt_message(nonce, 32, AES_256_key, iv, enc_nonce, &enc_nonce_len);
 
@@ -470,7 +457,6 @@ int main(int argc, char** argv){
                         printf("HMACs do not match, connection aborted\n");
                     }
 
-                    checkreturnint(addclient(clients, connectsoc, 0, shared_secret), "addclient error");
                     //checkreturnint(recv(selind, (void*)&cmd, CMDLEN, 0), "recv of command error");
                     while(recv(selind, (void*)&cmd, CMDLEN, 0) > 0){
                         if (strcmp(cmd, "logout") == 0){
@@ -485,22 +471,28 @@ int main(int argc, char** argv){
                             uint32_t ciphertext_len_n;
                             checkreturnint(recv(selind, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error receiving ct len");
                             long ciphertext_len = ntohl(ciphertext_len_n);
-                            printf("Ciphertext length: %ld\n", ciphertext_len);
                             unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
                             checkreturnint(recv(selind, (void*) ciphertext, ciphertext_len, 0), "error receiving ct");
+                            printf("Received ciphertext length: %ld\n", ciphertext_len);
+                            printf("Received ciphertext: ");
+                            for (int i = 0; i < ciphertext_len; i++){
+                                printf("%02x", ciphertext[i]);
+                            }
+                            printf("\n");
 
                             char* plaintext = malloc(BUF_SIZE);
                             int plaintext_len;
                             decrypt_message(ciphertext, ciphertext_len, AES_256_key, reg_iv, (unsigned char*)plaintext, &plaintext_len);
-                            char* username = strtok(plaintext, ",");
-                            char* email = strtok(NULL, ",");
+                            char* email = strtok(plaintext, ",");
+                            char* username = strtok(NULL, ",");
                             char* hashedpsw = strtok(NULL, ",");
                             char* recv_timestamp = strtok(NULL, "\0");
-                            // printing the parsed string
-                            printf("Username: %s\n", username);
-                            printf("Email: %s\n", email);
-                            printf("hashed password: %s\n", hashedpsw);
-                            printf("Timestamp: %s\n", recv_timestamp);
+
+                            if(isin(clients, username) == 1){
+                                printf("User \"%s\" already registered.\n", username);
+                                checkreturnint(send(selind, (void*)"exists", CMDLEN, 0), "error sending fail");
+                                continue;
+                            }
 
                             int check = checktimestamp(recv_timestamp);
 
@@ -508,7 +500,7 @@ int main(int argc, char** argv){
                             uint32_t hmac_len_n;
                             checkreturnint(recv(selind, (void*)&hmac_len_n, sizeof(uint32_t), 0), "error receiving HMAC length");
                             long hmac_len = ntohl(hmac_len_n);
-                            unsigned char* recv_hmac = (unsigned char*)malloc(hmac_len);
+                            unsigned char* recv_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                             checkreturnint(recv(selind, (void*)recv_hmac, hmac_len, 0), "error receiving HMAC");
 
                             // compute HMAC of the ciphertext
@@ -516,53 +508,59 @@ int main(int argc, char** argv){
                             unsigned int computed_hmac_len;
                             computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                             compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
-                            
-                            int compare = CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len);
-                            // compare the HMACs
-                            
-                            if (compare == 0 && check == 1) {
-                                printf("HMACs match, timestamp within range, registration successful\n");
-                                // read the server private key from a file
-                                FILE* rsa_priv_key_file = fopen("server_privkey.pem", "r");
-                                if (!rsa_priv_key_file) {
-                                    perror("Failed to open RSA private key file");
-                                    exit(-1);
-                                }
-                                EVP_PKEY* rsa_priv_key = PEM_read_PrivateKey(rsa_priv_key_file, NULL, NULL, "TaylorSwift13");
-                                if (!rsa_priv_key) {
-                                    perror("Failed to read RSA private key");
-                                    exit(-1);
-                                }
-                                fclose(rsa_priv_key_file);
-                                // derive the AES 256 key from the RSA private key by computing its SHA256 hash
-                                unsigned char* AES_256_key;
-                                AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-                                compute_sha256((unsigned char*)rsa_priv_key, sizeof(rsa_priv_key), AES_256_key);
-                                // compute the encryption of the password hash with the derived AES key 
-                                unsigned char* enc_psw = malloc(sizeof(hashedpsw)+16);
-                                int enc_psw_len;
-                                encrypt_message_AES256ECB((unsigned char*)hashedpsw, sizeof(hashedpsw), AES_256_key, enc_psw, &enc_psw_len);
-                                // save encrypted password in structure
-
-                                
-                            } else {
-                                printf("Error, registration failed\n");
-                            }
-
-
-
-
-
 /* 
-                            // save the parsed string in a csv file with the fields divided by commas
-                            FILE* csv_file = fopen("users.csv", "a");
-                            if (!csv_file) {
-                                perror("Failed to open csv file");
-                                return 1;
+                            printf("Received HMAC: ");
+                            for (int i = 0; i < hmac_len; i++){
+                                printf("%02x", recv_hmac[i]);
                             }
-                            fprintf(csv_file, "%s\n", plaintext);
-                            fclose(csv_file);
-*/
+                            printf("\n");
+
+                            printf("Computed HMAC: ");
+                            for (int i = 0; i < computed_hmac_len; i++){
+                                printf("%02x", computed_hmac[i]);
+                            }
+                            printf("\n"); */
+
+                            if(CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len) != 0){
+                                checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
+                                printf("HMACs do not match, registration of user \"%s\" failed.\n", username);
+                                continue;
+                            }
+                            else{
+                                printf("HMACs match, registration of user \"%s\" successful!\n", username);
+                            }
+
+                            puts("sending ok response to client");
+                            checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
+                            
+                            char* salt = malloc(SALT_LEN);
+                            char* salted_hashedpwd = malloc(HASH_SIZE);
+                            compute_sha256_salted((unsigned char*)hashedpsw, strlen(hashedpsw),salted_hashedpwd, salt);
+/*                             printf("Salted password: ");
+                            for (int i = 0; i < HASH_SIZE; i++){
+                                printf("%02x", salted_hashedpwd[i]);
+                            }
+                            printf("\n"); */
+                            
+
+                            checkreturnint(addclient(clients, selind, 0, username, email, salted_hashedpwd, salt, shared_secret), "addclient error");
+
+                            printlist(clients);
+
+
+/*
+                            // derive the AES 256 key from the RSA private key by computing its SHA256 hash
+                            unsigned char* AES_256_key;
+                            AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                            compute_sha256((unsigned char*)rsa_priv_key, sizeof(rsa_priv_key), AES_256_key);
+                            // compute the encryption of the password hash with the derived AES key 
+                            unsigned char* enc_psw = malloc(sizeof(hashedpsw)+16);
+                            int enc_psw_len;
+                            encrypt_message_AES256ECB((unsigned char*)hashedpsw, sizeof(hashedpsw), AES_256_key, enc_psw, &enc_psw_len);
+                            // save encrypted password in structure */
+
+
+
 
                             continue;
                         } else if (strcmp(cmd, "login") == 0) {
@@ -586,7 +584,6 @@ int main(int argc, char** argv){
                     printf("Client #%d logged out\n", selind);
                     FD_CLR(selind, &master);
                     close(selind);
-                    checkreturnint(removeclient(clients, selind), "removeclient error");
                     fflush(stdout);
                 }
             }
