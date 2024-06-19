@@ -292,6 +292,7 @@ void iv_comm(int selind, unsigned char* iv, unsigned char* shared_secret, int sh
     // send the IV HMAC to the client
     checkreturnint(send(selind, (void*)iv_hmac, iv_hmac_len, 0), "error sending IV HMAC");
     //printf("IV HMAC sent\n");
+    free(iv_hmac);
 }
 
 // function to receive IV and HMAC and check if they are correct
@@ -332,16 +333,21 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
 
 
     // compute the HMAC of the IV
-    HMAC_CTX* iv_hmac_ctx;
-    iv_hmac_ctx = HMAC_CTX_new();
-    HMAC_Init(iv_hmac_ctx, shared_secret, shared_secret_len, EVP_sha256());
-    HMAC_Update(iv_hmac_ctx, iv, 16);
-    unsigned char* iv_hmac_comp;
-    unsigned int iv_hmac_len_comp;
-    iv_hmac_comp = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-    HMAC_Final(iv_hmac_ctx, iv_hmac_comp, &iv_hmac_len_comp);
-    HMAC_CTX_free(iv_hmac_ctx);
-    // print the computed HMAC
+    unsigned char* iv_hmac_comp=(unsigned char*)malloc(HMAC_SIZE);
+    // check if malloc worked
+    if (!iv_hmac_comp){
+        perror("malloc failed");
+        return -1;
+    }
+    printf("Malloced iv_hmac");
+    int iv_hmac_len_comp;
+    printf("shared_secret_len: %ld\n", shared_secret_len);
+    printf("shared_secret: ");
+    for (int i = 0; i < shared_secret_len; i++){
+        printf("%02x", shared_secret[i]);
+    }
+    puts("");
+    compute_hmac(iv, 16, shared_secret, shared_secret_len, iv_hmac_comp, &iv_hmac_len_comp);
     printf("Computed IV HMAC: \n");
     for (int i = 0; i < iv_hmac_len_comp; i++){
         printf("%02x", iv_hmac_comp[i]);
@@ -355,5 +361,7 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
     else{
         puts("IV HMACs are equal, parameters accepted");
     }
+    free(iv_hmac);
+    free(iv_hmac_comp);
     return 0;
 }

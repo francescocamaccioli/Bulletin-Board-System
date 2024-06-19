@@ -57,7 +57,6 @@ int addclient(ClientList* list, int fd, int s, char* username, char* email, char
      return -1;
    }
    memcpy(toadd->sessionKey, key, 256);
-   printf("Session Key: %s\n", toadd->sessionKey);
    toadd->next = NULL;
 
    if(list->head == NULL || list->tail == NULL){
@@ -148,7 +147,11 @@ void printlist(ClientList* list) {
          printf("%02x", temp->hashedpsw[i]);
       }
       printf("\n");
-      printf("Salt: %s\n", temp->salt);
+      printf("Salt: ");
+      for (int i = 0; i < SALT_LEN; i++) {
+         printf("%02x", temp->salt[i]);
+      }
+      printf("\n");
       // printing session key as hex
       printf("Session Key: ");
       for (int i = 0; i < 256; i++) {

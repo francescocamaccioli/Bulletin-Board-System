@@ -452,13 +452,13 @@ int main(int argc, char* argv[]){
             //generate timestamp string with create_timestamp
             char* reg_timestamp = create_timestamp();
             printf("timestamp: %s\n", reg_timestamp);
-            int total_len = strlen(email)+strlen(username)+strlen(pwd_hash_hex)+strlen(reg_timestamp)+4;
-            char* tosend = calloc(total_len, sizeof(char));
+            int total_len = strlen(email)+strlen(username)+strlen(pwd_hash_hex)+strlen(reg_timestamp)+5;
+            char* tosend = malloc(total_len);
             if (!tosend){
                 perror("Error creating packet..");
                 continue;
             };
-
+            
             // build a string tosend with email, username, password hash and timestamp
             snprintf(tosend, total_len, "%s,%s,%s,%s", email, username, pwd_hash_hex, reg_timestamp);
             printf("tosend: %s\n", tosend);
@@ -468,9 +468,9 @@ int main(int argc, char* argv[]){
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
             iv_comm(lissoc, iv, shared_secret, shared_secret_len);
             // encrypting with AES CBC mode
-            unsigned char* ciphertext = (unsigned char*)malloc(sizeof(tosend) + 16);
+            unsigned char* ciphertext = (unsigned char*)malloc(total_len + 16);
             int ciphertext_len;
-            encrypt_message((unsigned char*)tosend, strlen(tosend), AES_256_key, iv, ciphertext, &ciphertext_len);
+            encrypt_message((unsigned char*)tosend, total_len, AES_256_key, iv, ciphertext, &ciphertext_len);
             uint32_t ciphertext_len_n = htonl(ciphertext_len);
             printf("Ciphertext length: %d\n", ciphertext_len);
             // print ciphertext as hex

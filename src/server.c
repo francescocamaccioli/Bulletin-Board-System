@@ -163,6 +163,8 @@ int main(int argc, char** argv){
                         return 1;
                     }
 
+                    printf("Certificate sent to client #%d\n", selind);
+
                     // creating the DH parameters
                     // generate DH parameters using RFC 5114: p and g are fixed
                     EVP_PKEY* dh_params;
@@ -300,6 +302,7 @@ int main(int argc, char** argv){
                     checkreturnint(send(selind, (void*)&signature_len_n, sizeof(uint32_t), 0), "Error sending signature length");
                     // send the signature to the client
                     checkreturnint(send(selind, (void*)signature, signature_len, 0), "Error sending signature");
+                    free(signature);
 
                     // Generate the shared secret
                     EVP_PKEY_CTX* ctx_drv = EVP_PKEY_CTX_new(server_keypair, NULL);
@@ -365,7 +368,7 @@ int main(int argc, char** argv){
                     unsigned char* enc_nonce = (unsigned char*)malloc(50);
                     int enc_nonce_len;
                     encrypt_message(nonce, 32, AES_256_key, iv, enc_nonce, &enc_nonce_len);
-
+                    free(iv);
                     // print the encrypted nonce
                     /* printf("Encrypted nonce: ");
                     for (int i = 0; i < enc_nonce_len; i++){
@@ -382,7 +385,7 @@ int main(int argc, char** argv){
                     // send the encrypted nonce to the client
                     checkreturnint(send(selind, (void*)enc_nonce, enc_nonce_len, 0), "error sending encrypted nonce");
                     //printf("encrypted nonce sent\n");
-
+                    free(enc_nonce);
 
                     int nonce_len = 32;
 
@@ -419,9 +422,13 @@ int main(int argc, char** argv){
                     unsigned char* dec_struct = malloc(sizeof(TIMESTAMP_LEN + HMAC_SIZE));
                     int dec_struct_len;
                     decrypt_message(enc_struct, enc_struct_len, AES_256_key, received_iv, dec_struct, &dec_struct_len);
+                    free(enc_struct);
+                    free(received_iv);
+
 
                     MessageAuth recv_auth;
                     memcpy(&recv_auth, dec_struct, sizeof(recv_auth));
+                    free(dec_struct);
 
                     // print the decrypted structure
                     /* printf("Decrypted structure: \n");
@@ -456,6 +463,7 @@ int main(int argc, char** argv){
                     else{
                         printf("HMACs do not match, connection aborted\n");
                     }
+                    free(computed_hmac_nonce);
 
                     //checkreturnint(recv(selind, (void*)&cmd, CMDLEN, 0), "recv of command error");
                     while(recv(selind, (void*)&cmd, CMDLEN, 0) > 0){
@@ -483,10 +491,18 @@ int main(int argc, char** argv){
                             char* plaintext = malloc(BUF_SIZE);
                             int plaintext_len;
                             decrypt_message(ciphertext, ciphertext_len, AES_256_key, reg_iv, (unsigned char*)plaintext, &plaintext_len);
+                            free(reg_iv);
                             char* email = strtok(plaintext, ",");
                             char* username = strtok(NULL, ",");
                             char* hashedpsw = strtok(NULL, ",");
                             char* recv_timestamp = strtok(NULL, "\0");
+                            printf("received timestamp length: %ld\n", strlen(recv_timestamp));
+                            printf("Received email: %s\n", email);
+                            printf("Received username: %s\n", username);
+                            printf("Received hashed password: %s\n", hashedpsw);
+                            printf("Received timestamp: %s\n", recv_timestamp);
+
+
 
                             if(isin(clients, username) == 1){
                                 printf("User \"%s\" already registered.\n", username);
@@ -508,7 +524,10 @@ int main(int argc, char** argv){
                             unsigned int computed_hmac_len;
                             computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                             compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
-/* 
+                            free(ciphertext);
+
+
+                            /*
                             printf("Received HMAC: ");
                             for (int i = 0; i < hmac_len; i++){
                                 printf("%02x", recv_hmac[i]);
@@ -520,7 +539,7 @@ int main(int argc, char** argv){
                                 printf("%02x", computed_hmac[i]);
                             }
                             printf("\n"); */
-
+                            printf("username: %s\n", username); 
                             if(CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len) != 0){
                                 checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
                                 printf("HMACs do not match, registration of user \"%s\" failed.\n", username);
@@ -529,6 +548,8 @@ int main(int argc, char** argv){
                             else{
                                 printf("HMACs match, registration of user \"%s\" successful!\n", username);
                             }
+                            free(computed_hmac);
+                            free(recv_hmac);
 
                             puts("sending ok response to client");
                             checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
