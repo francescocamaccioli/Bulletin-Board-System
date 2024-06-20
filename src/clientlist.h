@@ -4,16 +4,18 @@
 #include <errno.h>
 
 #define AES_KEY_LEN EVP_MD_size(EVP_sha256())
-#define SHARED_SECRET_LEN 513
+#define SHARED_SECRET_LEN 256
 
 typedef struct clientNode{
    int clientfd;
+   int hs; // 0: not handshaked, 1: handshaked
    int status; // 0: not logged in, 1: logged in
    char username[USERNAME_LEN];
    char email[EMAIL_LEN];
    char hashedpsw[HASH_SIZE];
    char salt[SALT_LEN];
    unsigned char sessionKey[256];
+   unsigned char sharedSecret[SHARED_SECRET_LEN];
    struct clientNode* next;
 } ClientNode;
 
@@ -31,6 +33,85 @@ ClientList* create_clientlist() {
     list->head = NULL;
     list->tail = NULL;
     return list;
+}
+
+int addhs(ClientList* list, int fd, unsigned char* sharedsecret, unsigned char* sesionkey){
+   if(list == NULL){
+      perror("list uninitialized.");
+      return -1;
+   }
+
+   ClientNode* toadd = (ClientNode*)malloc(sizeof(ClientNode));
+   if (!toadd) {
+     perror("Failed to allocate memory for new node");
+     return -1;
+   }
+   toadd->clientfd = fd;
+   toadd->status = 0;
+   toadd->hs = 1;
+   toadd->next = NULL;
+   printf("sharedsecret: \n");
+   for (int i = 0; i < SHARED_SECRET_LEN; i++) {
+      printf("%02x", sharedsecret[i]);
+   }
+   printf("\n");
+   printf("sessionkey: \n");
+   for (int i = 0; i < AES_KEY_LEN; i++) {
+      printf("%02x", sesionkey[i]);
+   }
+   memcpy(toadd->sharedSecret, sharedsecret, SHARED_SECRET_LEN);
+   memcpy(toadd->sessionKey, sesionkey, AES_KEY_LEN);
+
+   if(list->head == NULL || list->tail == NULL){
+      list->head = list->tail = toadd;
+   }
+   else{
+      list->tail->next = toadd;
+      list->tail = toadd;
+   }
+   return 0;
+}
+
+// function that find the element in the list with the given fd
+ClientNode* findclient(ClientList* list, int fd) {
+    if (list == NULL) {
+        perror("list uninitialized.");
+        return NULL;
+    }
+
+    if (list->head == NULL) {
+        perror("list is empty.");
+        return NULL;
+    }
+
+    ClientNode* temp = list->head;
+
+    while (temp != NULL) {
+        if (temp->clientfd == fd) {
+            return temp;
+        }
+        temp = temp->next;
+    }
+    return NULL;
+}
+
+// function to add missing information to the client node
+int addinfo(ClientList* list, int fd, char* username, char* email, char* hashedpassword, char* salt){
+   if(list == NULL){
+      perror("list uninitialized.");
+      return -1;
+   }
+
+   ClientNode* toadd = findclient(list, fd);
+   if (!toadd) {
+      perror("Client not found.");
+      return -1;
+   }
+   strncpy(toadd->email, email, sizeof(toadd->email) - 1);
+   strncpy(toadd->username, username, sizeof(toadd->username) - 1);
+   strncpy(toadd->hashedpsw, hashedpassword, sizeof(toadd->hashedpsw) - 1);
+   strncpy(toadd->salt, salt, sizeof(toadd->salt) - 1);
+   return 0;
 }
 
 int addclient(ClientList* list, int fd, int s, char* username, char* email, char* hashedpassword, char* salt, unsigned char* key){
@@ -209,9 +290,13 @@ void printlist(ClientList* list) {
          printf("%02x", temp->salt[i]);
       }
       printf("\n");
+      printf("Shared Secret: ");
+      for (int i = 0; i < SHARED_SECRET_LEN; i++) {
+         printf("%02x", temp->sharedSecret[i]);
+      }
       // printing session key as hex
       printf("Session Key: ");
-      for (int i = 0; i < 256; i++) {
+      for (int i = 0; i < AES_KEY_LEN; i++) {
          printf("%02x", temp->sessionKey[i]);
       }
       printf("\n");

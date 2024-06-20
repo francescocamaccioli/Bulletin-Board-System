@@ -627,6 +627,197 @@ int main(int argc, char* argv[]){
         } else if (strcmp(input, "logout") == 0) {
             printf("Logging out...\n");
             checkreturnint(send(lissoc, (void*)"logout", CMDLEN, 0), "error sending logout req");
+            EVP_PKEY* dh_params;
+            dh_params = EVP_PKEY_new();
+            EVP_PKEY_set1_DH(dh_params, DH_get_2048_224());
+
+            // generating the client public-private key pair
+            EVP_PKEY_CTX* pkDHctx = EVP_PKEY_CTX_new(dh_params, NULL);
+            checkrnull(pkDHctx, "error creating EVP_PKEY_CTX");
+            EVP_PKEY* client_keypair = NULL;
+            ret = EVP_PKEY_keygen_init(pkDHctx);
+            if (ret <= 0){
+                perror("Failed to initialize key generation");
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                return 1;
+            }
+            ret = EVP_PKEY_keygen(pkDHctx, &client_keypair);
+            if (ret <= 0){
+                perror("Failed to generate key pair");
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                return 1;
+            }
+
+            // Extract the DH structure from the EVP_PKEY structure
+            DH* dh = EVP_PKEY_get1_DH(client_keypair);
+            if (!dh) {
+                perror("Failed to extract DH structure from key pair");
+                EVP_PKEY_free(client_keypair);
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                return 1;
+            }
+
+            // Extract the public key from the DH structure
+            const BIGNUM* pub_key_bn;
+            const BIGNUM* priv_key_bn;
+            DH_get0_key(dh, &pub_key_bn, &priv_key_bn); // Second argument is for the private key
+
+            // Convert the public key from BIGNUM to string
+            char* pub_key_str = BN_bn2hex(pub_key_bn);
+            if (!pub_key_str) {
+                perror("Failed to convert public key to string");
+                DH_free(dh);
+                EVP_PKEY_free(client_keypair);
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                return 1;
+            }
+
+            // Print or use the public key string as needed
+            // Serialize the public key
+            unsigned char* pub_key_buf = NULL;
+            int pub_key_len = i2d_PUBKEY(client_keypair, &pub_key_buf);
+            if (pub_key_len < 0) {
+                perror("Failed to serialize public key");
+                DH_free(dh);
+                EVP_PKEY_free(client_keypair);
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                return 1;
+            }    
+        /*
+            // print the serialized public key
+            printf("Serialized public key: \n");
+            for (int i = 0; i < pub_key_len; i++){
+                printf("%02x", pub_key_buf[i]);
+            }
+            printf("\n");
+        */
+            // Send the length of the serialized public key buffer
+            uint32_t pub_key_len_n = htonl(pub_key_len);
+            ret = send(lissoc, (void*)&pub_key_len_n, sizeof(uint32_t), 0);
+            if (ret < 0) {
+                perror("Error sending public key length");
+                DH_free(dh);
+                EVP_PKEY_free(client_keypair);
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                free(pub_key_buf);
+                return 1;
+            }
+
+            // Send the serialized public key to the server
+            ret = send(lissoc, (void*)pub_key_buf, pub_key_len, 0);
+            if (ret < 0) {
+                perror("Error sending public key");
+                DH_free(dh);
+                EVP_PKEY_free(client_keypair);
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                free(pub_key_buf);
+                return 1;
+            }
+
+            // Receive the server's public key
+            uint32_t server_pub_key_len_n;
+            ret = recv(lissoc, (void*)&server_pub_key_len_n, sizeof(uint32_t), 0);
+            if (ret < 0) {
+                perror("Error receiving server public key length");
+                DH_free(dh);
+                EVP_PKEY_free(client_keypair);
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                free(pub_key_buf);
+                return 1;
+            }
+
+            uint32_t server_pub_key_len = ntohl(server_pub_key_len_n);
+            unsigned char* server_pub_key_buf = (unsigned char*)malloc(server_pub_key_len);
+            ret = recv(lissoc, (void*)server_pub_key_buf, server_pub_key_len, 0);
+            if (ret < 0) {
+                perror("Error receiving server public key");
+                DH_free(dh);
+                EVP_PKEY_free(client_keypair);
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                free(pub_key_buf);
+                free(server_pub_key_buf);
+                return 1;
+            }
+
+            // receive digital signature on server public key
+            uint32_t sign_len;
+            ret = recv(lissoc, (void*)&sign_len, sizeof(uint32_t), 0);
+            if (ret < 0){
+                perror("error receiving signature length");
+                exit(-1);
+            }
+
+            long sign_len_n = ntohl(sign_len);
+            unsigned char* pksign = (unsigned char*)malloc(sign_len_n);
+            ret = recv(lissoc, (void*)pksign, sign_len_n, 0);
+            if (ret < 0){
+                perror("error receiving signature");
+                exit(-1);
+            }
+
+            // verify the signature
+            EVP_MD_CTX* ctx_verify;
+            ctx_verify = EVP_MD_CTX_new();
+            EVP_VerifyInit(ctx_verify, EVP_sha256());
+            EVP_VerifyUpdate(ctx_verify, server_pub_key_buf, server_pub_key_len);
+            int verify = EVP_VerifyFinal(ctx_verify, pksign, sign_len_n, server_pubkey);
+            if (verify != 1){
+                perror("error verifying signature");
+                exit(-1);
+            }
+            else{
+                printf("Signature verified, parameters accepted\n");
+            }
+            EVP_MD_CTX_free(ctx_verify);
+
+
+            // Deserialize the server's public key
+            EVP_PKEY* server_pub_key = d2i_PUBKEY(NULL, (const unsigned char**)&server_pub_key_buf, server_pub_key_len);
+            if (!server_pub_key) {
+                perror("Error deserializing server public key");
+                DH_free(dh);
+                EVP_PKEY_free(client_keypair);
+                EVP_PKEY_CTX_free(pkDHctx);
+                EVP_PKEY_free(dh_params);
+                free(pub_key_buf);
+                free(server_pub_key_buf);
+                return 1;
+            }
+
+            // Generate the shared secret
+            EVP_PKEY_CTX* ctx_drv = EVP_PKEY_CTX_new(client_keypair, NULL);
+            EVP_PKEY_derive_init(ctx_drv);
+            EVP_PKEY_derive_set_peer(ctx_drv, server_pub_key);
+
+            EVP_PKEY_derive(ctx_drv, NULL, &shared_secret_len);
+            EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
+            printf("shared secret len: %zu\n" , shared_secret_len);
+            // Print the shared secret
+        /*  printf("Shared secret: \n");
+            for (int i = 0; i < shared_secret_len; i++) {
+                printf("%02x", shared_secret[i]);
+            }
+            printf("\n"); 
+        */
+
+            // hashing the shared secret to obtain the AES 256 key
+            EVP_MD_CTX* keyctx;
+            keyctx = EVP_MD_CTX_new();
+            EVP_DigestInit(keyctx, EVP_sha256());
+            EVP_DigestUpdate(keyctx,(unsigned char*)shared_secret, shared_secret_len);
+            EVP_DigestFinal(keyctx, AES_256_key, (unsigned int*)&AES_256_key_len);
+            EVP_MD_CTX_free(keyctx);
+
+            /*
             checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
             if (strcmp(buffer, "ok") == 0){
                 puts("Logged out successfully!");
@@ -634,6 +825,7 @@ int main(int argc, char* argv[]){
             } else {
                 puts("Logout failed, try again.");
             }
+            */
         } else if (strcmp(input, "help") == 0) {
             help();
         } else {
