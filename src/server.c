@@ -467,7 +467,17 @@ int main(int argc, char** argv){
                     //checkreturnint(recv(selind, (void*)&cmd, CMDLEN, 0), "recv of command error");
                     while(recv(selind, (void*)&cmd, CMDLEN, 0) > 0){
                         if (strcmp(cmd, "logout") == 0){
-                            break;
+                            if(isloggedin(clients, getusername(clients, selind)) == 0){
+                                checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
+                                continue;
+                            }
+                            else{
+                                printf("Client #%d logged out\n", selind);
+                                checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
+                                changestatus(clients, getusername(clients, selind), 0);
+                                fflush(stdout);
+                                continue;
+                            }
                         }
                         if (strcmp(cmd, "register") == 0) {
                             if(isloggedin(clients, getusername(clients, selind)) == 1){
@@ -484,12 +494,6 @@ int main(int argc, char** argv){
                             long ciphertext_len = ntohl(ciphertext_len_n);
                             unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
                             checkreturnint(recv(selind, (void*) ciphertext, ciphertext_len, 0), "error receiving ct");
-                            printf("ciphertext length: %ld\n", ciphertext_len);
-                            printf("ciphertext: ");
-                            for (int i = 0; i < ciphertext_len; i++){
-                                printf("%02x", ciphertext[i]);
-                            }
-                            printf("\n");
 
                             // receive HMAC length
                             uint32_t hmac_len_n;
@@ -518,15 +522,10 @@ int main(int argc, char** argv){
                             char* plaintext = malloc(BUF_SIZE);
                             int plaintext_len;
                             decrypt_message(ciphertext, ciphertext_len, AES_256_key, reg_iv, (unsigned char*)plaintext, &plaintext_len);
-                            printf("plaintext: %s\n", plaintext);
                             char* email = strtok(plaintext, ",");
                             char* username = strtok(NULL, ",");
                             char* hashedpsw = strtok(NULL, ",");
                             char* recv_timestamp = strtok(NULL, "\0");
-                            printf("email: %s\n", email);
-                            printf("username: %s\n", username);
-                            printf("hashedpsw: %s\n", hashedpsw);
-                            printf("timestamp: %s\n", recv_timestamp);
 
                             if(!email || !username || !hashedpsw || !recv_timestamp){
                                 printf(RED "Invalid registration request\n" RESET);
@@ -597,13 +596,9 @@ int main(int argc, char** argv){
                             int plaintext_len;
                             decrypt_message(ciphertext, ciphertext_len, AES_256_key, login_iv, (unsigned char*)plaintext, &plaintext_len);
                             
-                            printf("plaintext: %s\n", plaintext);
                             char* username = strtok(plaintext, ",");
                             char* hashedpsw = strtok(NULL, ",");
                             char* recv_timestamp = strtok(NULL, "\0");
-                            printf("username: %s\n", username);
-                            printf("hashedpsw: %s\n", hashedpsw);
-                            printf("timestamp: %s\n", recv_timestamp);
                             if(!username || !hashedpsw || !recv_timestamp){
                                 printf("Invalid login request\n");
                                 checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
@@ -657,7 +652,7 @@ int main(int argc, char** argv){
                             }
                             printf("Adding item\n");
 
-                                                        /*
+                            /*
                             // derive the AES 256 key from the RSA private key by computing its SHA256 hash
                             unsigned char* AES_256_key;
                             AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
@@ -666,7 +661,9 @@ int main(int argc, char** argv){
                             unsigned char* enc_psw = malloc(sizeof(hashedpsw)+16);
                             int enc_psw_len;
                             encrypt_message_AES256ECB((unsigned char*)hashedpsw, sizeof(hashedpsw), AES_256_key, enc_psw, &enc_psw_len);
-                            // save encrypted password in structure */
+                            // save encrypted password in structure 
+                            */
+
                             continue;
                         }
                         else {
@@ -674,8 +671,6 @@ int main(int argc, char** argv){
                             continue;
                         }
                     }
-                    changestatus(clients, getusername(clients, selind), 0);
-                    printf("Client #%d logged out\n", selind);
                     FD_CLR(selind, &master);
                     close(selind);
                     fflush(stdout);

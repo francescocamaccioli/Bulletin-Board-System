@@ -460,8 +460,6 @@ int main(int argc, char* argv[]){
             
             // build a string tosend with email, username, password hash and timestamp
             snprintf(tosend, total_len, "%s,%s,%s,%s", email, username, pwd_hash_hex, reg_timestamp);
-            printf("tosend: %s\n", tosend);
-            printf("tosend lenght: %ld\n", strlen(tosend));
             
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
@@ -472,13 +470,6 @@ int main(int argc, char* argv[]){
             int ciphertext_len;
             encrypt_message((unsigned char*)tosend, total_len, AES_256_key, iv, ciphertext, &ciphertext_len);
             uint32_t ciphertext_len_n = htonl(ciphertext_len);
-            printf("Ciphertext length: %d\n", ciphertext_len);
-            // print ciphertext as hex
-            printf("Ciphertext: ");
-            for (int i = 0; i < ciphertext_len; i++){
-                printf("%02x", ciphertext[i]);
-            }
-            printf("\n");
 
             checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
             checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
@@ -537,14 +528,13 @@ int main(int argc, char* argv[]){
             pwd_hash_hex[64] = 0;
             // generating timestamp
             char* login_timestamp = create_timestamp();
-            int total_len = strlen(username)+strlen(pwd_hash_hex)+strlen(login_timestamp)+3;
+            int total_len = strlen(username)+strlen(pwd_hash_hex)+strlen(login_timestamp)+4;
             char* tosend = malloc(total_len);
             if (!tosend){
                 perror("Error creating packet..");
                 continue;
             };
-            snprintf(tosend, total_len, "%s,%s,%s", username, pwd_hash, login_timestamp);
-            printf("tosend: %s\n", tosend);
+            snprintf(tosend, total_len, "%s,%s,%s", username, pwd_hash_hex, login_timestamp);
             
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
@@ -618,15 +608,7 @@ int main(int argc, char* argv[]){
             }
             char* tosend = malloc(CMDLEN+sizeof(mid));
             snprintf(tosend, CMDLEN+sizeof(mid), "%s,%s", "get", arg);
-
-            checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
-            if (strcmp(buffer, "ok") == 0){
-                puts("Message added successfully!");
-            } else if (strcmp(buffer, "notlogged") == 0){
-                puts("You need to login first!");
-            } else {
-                puts("Message add failed, try again.");
-            }
+            
             
         } else if (strcmp(input, "add") == 0) {
             char* title = arg;
@@ -645,15 +627,19 @@ int main(int argc, char* argv[]){
         } else if (strcmp(input, "logout") == 0) {
             printf("Logging out...\n");
             checkreturnint(send(lissoc, (void*)"logout", CMDLEN, 0), "error sending logout req");
-            close(lissoc);
-            break;
+            checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
+            if (strcmp(buffer, "ok") == 0){
+                puts("Logged out successfully!");
+                break;
+            } else {
+                puts("Logout failed, try again.");
+            }
         } else if (strcmp(input, "help") == 0) {
             help();
         } else {
             printf("Invalid choice, please try again.\n");
         }
     }
-    checkreturnint(send(lissoc, (void*)"logout", CMDLEN, 0), "error sending logout req");
     close(lissoc);
     return 0;
 }

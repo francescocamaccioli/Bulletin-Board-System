@@ -23,8 +23,41 @@ MessageList* create_messagelist() {
         exit(EXIT_FAILURE);
     }
     list->head = NULL;
+    list->size = 0;
     return list;
 }
 
+Message* create_message(int mid, char* author, char* title, char* body) {
+    Message* message = (Message*)malloc(sizeof(Message));
+    if (!message) {
+        perror("Failed to allocate memory for message");
+        exit(EXIT_FAILURE);
+    }
+    message->mid = mid;
+    strcpy(message->author, author);
+    strcpy(message->title, title);
+    strcpy(message->body, body);
+    message->next = NULL;
+    return message;
+}
+
 // implementing a head insert to keep messages ordered by creation time
-int insert();
+void insert_message(MessageList* list, Message* message) {
+    if (!list || !message) {
+        return;
+    }
+    message->next = list->head;
+    list->head = message;
+    list->size++;
+}
+
+MessageList* get_last_n_messages(MessageList* list, int n) {
+    MessageList* last_n_messages = create_messagelist();
+    Message* current = list->head;
+    while (current && n > 0) {
+        insert_message(last_n_messages, current);
+        current = current->next;
+        n--;
+    }
+    return last_n_messages;
+}
