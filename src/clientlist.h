@@ -13,7 +13,7 @@ typedef struct clientNode{
    char email[EMAIL_LEN];
    char hashedpsw[HASH_SIZE];
    char salt[SALT_LEN];
-   unsigned char* sessionKey;
+   unsigned char sessionKey[256];
    struct clientNode* next;
 } ClientNode;
 
@@ -50,13 +50,7 @@ int addclient(ClientList* list, int fd, int s, char* username, char* email, char
    strncpy(toadd->username, username, sizeof(toadd->username) - 1);
    strncpy(toadd->hashedpsw, hashedpassword, sizeof(toadd->hashedpsw) - 1);
    strncpy(toadd->salt, salt, sizeof(toadd->salt) - 1);
-   toadd->sessionKey = malloc(256);
-   if (!toadd->sessionKey) {
-     perror("Failed to allocate memory for session key");
-     free(toadd);
-     return -1;
-   }
-   memcpy(toadd->sessionKey, key, 256);
+   strncpy(toadd->sessionKey, key, sizeof(toadd->sessionKey) - 1);
    toadd->next = NULL;
 
    if(list->head == NULL || list->tail == NULL){
@@ -112,12 +106,10 @@ int removeclient(ClientList* list, int fd){
 
 int isin(ClientList* list, char* username){
    if (list == NULL){
-      perror("list uninitialized.");
       return -1;
    }
 
    if (list->head == NULL){
-      perror("list is empty.");
       return -1;
    }
 
@@ -129,7 +121,72 @@ int isin(ClientList* list, char* username){
       }
       temp = temp->next;
    }
+   return -1;
+}
+
+int isloggedin(ClientList* list, char* username){
+   if (list == NULL || username == NULL){
+      return -1;
+   }
+
+   if (list->head == NULL){
+      return -1;
+   }
+
+   ClientNode* temp = list->head;
+
+   while (temp != NULL){
+      if (strcmp(temp->username, username) == 0){
+         if (temp->status == 1){
+            return 1;
+         }
+         else{
+            return 0;
+         }
+      }
+      temp = temp->next;
+   }
    return 0;
+}
+
+void changestatus(ClientList* list, char* username, int s){
+   if (list == NULL){
+      return;
+   }
+
+   if (list->head == NULL){
+      return;
+   }
+
+   ClientNode* temp = list->head;
+
+   while (temp != NULL){
+      if (strcmp(temp->username, username) == 0){
+         temp->status = s;
+         return;
+      }
+      temp = temp->next;
+   }
+}
+
+char* getusername(ClientList* list, int fd){
+   if (list == NULL){
+      return NULL;
+   }
+
+   if (list->head == NULL){
+      return NULL;
+   }
+
+   ClientNode* temp = list->head;
+
+   while (temp != NULL){
+      if (temp->clientfd == fd){
+         return temp->username;
+      }
+      temp = temp->next;
+   }
+   return NULL;
 }
 
 

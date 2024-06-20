@@ -434,14 +434,13 @@ int main(int argc, char* argv[]){
                 continue;
             }
 
-            puts("Sending register to server");
-            checkreturnint(send(lissoc, (void*)"register", CMDLEN, 0), "error sending register");
-
             unsigned char* pwd_hash = (unsigned char*)malloc(HASH_SIZE);
             if(!pwd_hash){
                 perror("memory finished");
                 exit(EXIT_FAILURE);
             }
+            puts("Sending register to server");
+            checkreturnint(send(lissoc, (void*)"register", CMDLEN, 0), "error sending register");
             compute_sha256((unsigned char*)password, strlen(password), pwd_hash);
             
             char pwd_hash_hex[65];
@@ -451,7 +450,7 @@ int main(int argc, char* argv[]){
             pwd_hash_hex[64] = 0;
             //generate timestamp string with create_timestamp
             char* reg_timestamp = create_timestamp();
-            printf("timestamp: %s\n", reg_timestamp);
+/*          printf("timestamp: %s\n", reg_timestamp); */
             int total_len = strlen(email)+strlen(username)+strlen(pwd_hash_hex)+strlen(reg_timestamp)+5;
             char* tosend = malloc(total_len);
             if (!tosend){
@@ -466,6 +465,7 @@ int main(int argc, char* argv[]){
             
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
+            // sending it to client with its HMAC
             iv_comm(lissoc, iv, shared_secret, shared_secret_len);
             // encrypting with AES CBC mode
             unsigned char* ciphertext = (unsigned char*)malloc(total_len + 16);
@@ -482,31 +482,32 @@ int main(int argc, char* argv[]){
 
             checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
             checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
-
             // computing HMAC over cyphertext
             unsigned char* hmac_reg = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
             unsigned int hmac_reg_len;
             compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_reg, &hmac_reg_len);
             // sending HMAC
             uint32_t hmac_reg_len_n = htonl(hmac_reg_len);
-            printf("HMAC length: %d\n", hmac_reg_len);
+/*             printf("HMAC length: %d\n", hmac_reg_len);
             printf("HMAC: ");
             for (int i = 0; i < hmac_reg_len; i++){
                 printf("%02x", hmac_reg[i]);
             }
-            printf("\n");
+            printf("\n"); */
             checkreturnint(send(lissoc, (void*)&hmac_reg_len_n, sizeof(uint32_t), 0), "error sending hmac len");
             checkreturnint(send(lissoc, hmac_reg, hmac_reg_len, 0), "error sending hmac");
-            // receiving "ok" from server
+            // receiving response from server
             char* response = (char*)malloc(CMDLEN);
             puts("receiving response");
             checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
             if (strcmp(response, "ok") == 0){
-                puts("Registration successful!");
+                puts(GREEN "Registration successful!" RESET);
             } else if(strcmp(response, "exists") == 0){
-                puts("Username already used, try again.");
+                puts(RED "Username already used, try again." RESET);
+            } else if(strcmp(response, "timeout") == 0){
+                puts(RED "Timeout of 1 minute expired, try again." RESET);
             } else {
-                puts("Registration failed, try again.");
+                puts(RED "Registration failed, try again." RESET);
             }
 
         } else if (strcmp(input, "login") == 0) {            
@@ -528,15 +529,57 @@ int main(int argc, char* argv[]){
             }
             checkreturnint(send(lissoc, (void*)"login", CMDLEN, 0), "error sending login");
             compute_sha256((unsigned char*)password, strlen(password), pwd_hash);
-            int total_len = strlen(username)+strlen(password);
-            char* tosend = malloc(total_len+2);
+
+            char pwd_hash_hex[65];
+            for (int i = 0; i < 32; ++i) {
+                sprintf(&pwd_hash_hex[i*2], "%02x", pwd_hash[i]);
+            }
+            pwd_hash_hex[64] = 0;
+            // generating timestamp
+            char* login_timestamp = create_timestamp();
+            int total_len = strlen(username)+strlen(pwd_hash_hex)+strlen(login_timestamp)+3;
+            char* tosend = malloc(total_len);
             if (!tosend){
                 perror("Error creating packet..");
                 continue;
             };
-            snprintf(tosend, total_len+2, "%s,%s", username, pwd_hash);
+            snprintf(tosend, total_len, "%s,%s,%s", username, pwd_hash, login_timestamp);
+            printf("tosend: %s\n", tosend);
+            
+            // generating IV for AES encryption
+            unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
+            // sending it to client with its HMAC
+            iv_comm(lissoc, iv, shared_secret, shared_secret_len);
+            // encrypting with AES CBC mode
+            unsigned char* ciphertext = (unsigned char*)malloc(total_len + 16);
+            int ciphertext_len;
+            encrypt_message((unsigned char*)tosend, total_len, AES_256_key, iv, ciphertext, &ciphertext_len);
+            uint32_t ciphertext_len_n = htonl(ciphertext_len);
+            checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
+            checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
 
-            puts("Logging in...");
+            // computing HMAC over cyphertext
+            unsigned char* hmac_log = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+            unsigned int hmac_log_len;
+            compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_log, &hmac_log_len);
+            // sending HMAC
+            uint32_t hmac_log_len_n = htonl(hmac_log_len);
+            checkreturnint(send(lissoc, (void*)&hmac_log_len_n, sizeof(uint32_t), 0), "error sending hmac len");
+            checkreturnint(send(lissoc, hmac_log, hmac_log_len, 0), "error sending hmac");
+            // receiving response from server
+            char* response = (char*)malloc(CMDLEN);
+            checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
+            if (strcmp(response, "ok") == 0){
+                puts(GREEN"Login successful!"RESET);
+            } else if(strcmp(response, "nouser") == 0){
+                puts(RED"User not found, please register first."RESET);
+            } else if(strcmp(response, "wrongpsw") == 0){
+                puts(RED"Wrong password, try again."RESET);
+            } else if(strcmp(response, "already") == 0){
+                puts(RED"User already logged in."RESET);
+            } else {
+                puts(RED"Login failed, try again."RESET);
+            }
 
         } else if (strcmp(input, "list") == 0) {
             int n = atoi(arg);
@@ -551,9 +594,16 @@ int main(int argc, char* argv[]){
                 continue;
             }
             char* tosend = malloc(CMDLEN+sizeof(n));
-            snprintf(tosend, CMDLEN+sizeof(n), "%s,%s", "login", arg);
+            snprintf(tosend, CMDLEN+sizeof(n), "%s,%s", "list", arg);
 
-            puts("Listing n messages...");
+            checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
+            if (strcmp(buffer, "ok") == 0){
+                puts("Message added successfully!");
+            } else if (strcmp(buffer, "notlogged") == 0){
+                puts("You need to login first!");
+            } else {
+                puts("Message add failed, try again.");
+            }
 
         } else if (strcmp(input, "get") == 0) {
             int mid = atoi(arg);
@@ -569,13 +619,29 @@ int main(int argc, char* argv[]){
             char* tosend = malloc(CMDLEN+sizeof(mid));
             snprintf(tosend, CMDLEN+sizeof(mid), "%s,%s", "get", arg);
 
-            printf("Downloading message with mid=%d\n",mid);
+            checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
+            if (strcmp(buffer, "ok") == 0){
+                puts("Message added successfully!");
+            } else if (strcmp(buffer, "notlogged") == 0){
+                puts("You need to login first!");
+            } else {
+                puts("Message add failed, try again.");
+            }
+            
         } else if (strcmp(input, "add") == 0) {
             char* title = arg;
             char* body = strtok(NULL, "\0");
             char* tosend = malloc(CMDLEN+strlen(title)+strlen(body));
             snprintf(tosend, CMDLEN+strlen(title)+strlen(body), "%s,%s,%s", "add", title, body);
-            puts("Posting message...");
+
+            checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
+            if (strcmp(buffer, "ok") == 0){
+                puts("Message added successfully!");
+            } else if (strcmp(buffer, "notlogged") == 0){
+                puts("You need to login first!");
+            } else {
+                puts("Message add failed, try again.");
+            }
         } else if (strcmp(input, "logout") == 0) {
             printf("Logging out...\n");
             checkreturnint(send(lissoc, (void*)"logout", CMDLEN, 0), "error sending logout req");
