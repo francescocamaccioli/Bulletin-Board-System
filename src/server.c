@@ -23,7 +23,7 @@ int main(int argc, char** argv){
     }
 
     ClientList* clients = create_clientlist();
-    MessageList* messages = create_messagelist();
+    MessageList* messages = NULL;
 
     FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
     checkrnull(server_cert_file, "Failed to open server certificate file");
@@ -47,6 +47,25 @@ int main(int argc, char** argv){
         return 1;
     }
     fclose(rsa_priv_key_file);
+
+    //hash the server private key to obtain the AES key
+    unsigned char* rsa_priv_key_buf = NULL;
+    int rsa_priv_key_len = i2d_PrivateKey(rsa_priv_key, &rsa_priv_key_buf);
+    if (rsa_priv_key_len < 0) {
+        perror("Failed to serialize RSA private key");
+        return 1;
+    }
+    unsigned char* srv_AES_256_key;
+    srv_AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+    compute_sha256(rsa_priv_key_buf, rsa_priv_key_len, srv_AES_256_key);
+    free(rsa_priv_key_buf);
+
+    //print the server private key
+    printf("Server private key: \n");
+    for (int i = 0; i < EVP_MD_size(EVP_sha256()); i++){
+        printf("%02x", srv_AES_256_key[i]);
+    }
+
 
     RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
     if (rsa) {
@@ -649,6 +668,15 @@ int main(int argc, char** argv){
                             continue;
                         }
                         printf("Listing items...\n");
+                        ClientNode* current = findclient(clients, selind);
+                        unsigned char shared_secret[SHARED_SECRET_LEN];
+                        unsigned char AES_256_key[AES_KEY_LEN];
+                        memcpy(shared_secret, current->sharedSecret, SHARED_SECRET_LEN);
+                        memcpy(AES_256_key, current->sessionKey, AES_KEY_LEN);
+                        int shared_secret_len = SHARED_SECRET_LEN;
+                        char buffer[BUF_SIZE];
+                        get_last_n_messages(messages, current->username, 4, buffer, BUF_SIZE);
+                        printf("Messages: %s\n", buffer);
                         continue;
                     } else if (strcmp(cmd, "get") == 0) {
                         if(isloggedin(clients, getusername(clients, selind)) == 0){
@@ -658,6 +686,7 @@ int main(int argc, char** argv){
                         printf("Getting item\n");
                         continue;
                     } else if (strcmp(cmd, "add") == 0) {
+                        printf(YELLOW "Add request received\n" RESET);
                         ClientNode* current = findclient(clients, selind);
                         if(current->hs == 0){
                             printf(RED "Client #%d has not completed handshake\n" RESET, selind);
@@ -710,6 +739,12 @@ int main(int argc, char** argv){
                             checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
                             continue;
                         }
+                        else{
+                            puts("sending ok response to client");
+                            checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
+                        }
+
+                        printf("logged in user\n");
 
                         char* plaintext = malloc(BUF_SIZE);
                         int plaintext_len;
@@ -717,20 +752,33 @@ int main(int argc, char** argv){
 
                         char* title = strtok(plaintext, ",");
                         char* body = strtok(NULL, "\0");
+
+                        printf("Title: %s\n", title);
+                        printf("Body: %s\n", body);
+
+                        printf("body length: %d\n", strlen(body));
+                    
+
  
-                        unsigned char* enc_body = malloc(BUF_SIZE);
+                        unsigned char enc_body [BODY_LEN];
                         int enc_body_len;
-                        encrypt_message_AES256ECB((unsigned char*)body, strlen(body), AES_256_key, enc_body, &enc_body_len);
+                        encrypt_message_AES256ECB((unsigned char*)body, strlen(body)+1, srv_AES_256_key, enc_body, &enc_body_len);
+                        printf("Encrypted body length: %d\n", enc_body_len);    
 
-                        // now decrypt it back to test
-                        unsigned char* dec_body = malloc(BUF_SIZE);
-                        int dec_body_len;
-                        decrypt_message_AES256ECB(enc_body, enc_body_len, AES_256_key, dec_body, &dec_body_len);
+                        // print the encrypted body
+                        printf("Encrypted body: ");
+                        for (int i = 0; i < enc_body_len; i++){
+                            printf("%02x", enc_body[i]);
+                        }
 
+                        Message* message = create_message(messagecount, enc_body_len, current->username, title, enc_body);
+                        printf("created message\n");
                         
-                        
-                        free(enc_body);
-                        free(dec_body);
+                        insert_message(&messages, message);
+                        messagecount++;
+                        printf("Message added\n");
+                        printf("Current messages:\n");
+                        print_messagelist(messages);
 
                         continue;
                     } else if (strcmp (cmd, "logout") == 0) {

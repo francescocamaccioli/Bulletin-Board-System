@@ -72,6 +72,11 @@ void encrypt_message_AES256ECB(unsigned char* message, int message_len, unsigned
     EVP_EncryptFinal(ctx, ciphertext + outlen, &outlen);
     *ciphertext_len += outlen;
     EVP_CIPHER_CTX_free(ctx);
+    printf("Encrypted message: ");
+    for (int i = 0; i < *ciphertext_len; i++){
+        printf("%02x", ciphertext[i]);
+    }
+    printf("\n");
 
 }
 
@@ -86,6 +91,7 @@ void decrypt_message_AES256ECB(unsigned char* ciphertext, int ciphertext_len, un
     EVP_DecryptFinal(ctx, plaintext + outlen, &outlen);
     *plaintext_len += outlen;
     EVP_CIPHER_CTX_free(ctx);
+    printf("Decrypted message: %s\n", plaintext);
 }
 
 // create timestamp string

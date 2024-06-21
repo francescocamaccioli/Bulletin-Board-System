@@ -583,9 +583,10 @@ int main(int argc, char* argv[]){
                 continue;
             }
             char* tosend = malloc(CMDLEN+sizeof(n));
-            snprintf(tosend, CMDLEN+sizeof(n), "%s,%s", "list", arg);
-
-            checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
+            snprintf(tosend, CMDLEN+sizeof(n), "%s,%d", "list", n);
+            
+            checkreturnint(send(lissoc, (void*)"list", CMDLEN, 0), "error sending login");
+            //checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
             if (strcmp(buffer, "ok") == 0){
                 puts("Message added successfully!");
             } else if (strcmp(buffer, "notlogged") == 0){
@@ -623,16 +624,17 @@ int main(int argc, char* argv[]){
             }
 
             checkreturnint(send(lissoc, (void*)"add", CMDLEN, 0), "error sending add req");
-            snprintf(tosend, strlen(title)+strlen(body)+3, "%s,%s", title, body);
+            int total_len = strlen(title)+strlen(body)+3;
+            snprintf(tosend, total_len, "%s,%s", title, body);
             printf("tosend: %s\n", tosend);
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
             // sending it to client with its HMAC
             iv_comm(lissoc, iv, shared_secret, shared_secret_len);
             // encrypting with AES CBC mode
-            unsigned char* ciphertext = (unsigned char*)malloc(strlen(tosend) + 16);
+            unsigned char* ciphertext = (unsigned char*)malloc(total_len + 16);
             int ciphertext_len;
-            encrypt_message((unsigned char*)tosend, strlen(tosend), AES_256_key, iv, ciphertext, &ciphertext_len);
+            encrypt_message((unsigned char*)tosend, total_len, AES_256_key, iv, ciphertext, &ciphertext_len);
             uint32_t ciphertext_len_n = htonl(ciphertext_len);
             checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
             checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
