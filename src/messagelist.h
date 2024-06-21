@@ -5,25 +5,20 @@
 
 typedef struct message{
    int mid;
-   char author[USERNAME_LEN]; // da lasciare in chiaro per non fare 1204321380 decrypt a stecca
-   char title[TITLE_LEN]; // da encryptare con rsa priv key del server
-   char body[BODY_LEN]; // da encryptare
+   char author[USERNAME_LEN];
+   char title[TITLE_LEN];
+   char body[BODY_LEN];
    struct message* next;
 } Message;
+typedef struct Message* MessageList;
 
-typedef struct messageList{
-   Message* head;
-   int size;
-} MessageList;
-
-MessageList* create_messagelist() {
+MessageList create_messagelist() {
     MessageList* list = (MessageList*)malloc(sizeof(MessageList));
     if (!list) {
         perror("Failed to allocate memory for list");
         exit(EXIT_FAILURE);
     }
-    list->head = NULL;
-    list->size = 0;
+    list = NULL;
     return list;
 }
 
@@ -42,22 +37,34 @@ Message* create_message(int mid, char* author, char* title, char* body) {
 }
 
 // implementing a head insert to keep messages ordered by creation time
-void insert_message(MessageList* list, Message* message) {
-    if (!list || !message) {
+void insert_message(MessageList* list, Message* toinsert) {
+    if (!list || !toinsert) {
         return;
     }
-    message->next = list->head;
-    list->head = message;
-    list->size++;
+    toinsert->next = list;
+    list = toinsert;
 }
 
 MessageList* get_last_n_messages(MessageList* list, int n) {
     MessageList* last_n_messages = create_messagelist();
-    Message* current = list->head;
+    Message* current = list;
     while (current && n > 0) {
         insert_message(last_n_messages, current);
         current = current->next;
         n--;
     }
     return last_n_messages;
+}
+
+void free_messagelist(MessageList* list) {
+    if (!list) {
+        return;
+    }
+    Message* current = list;
+    while (current) {
+        Message* next = current->next;
+        free(current);
+        current = next;
+    }
+    free(list);
 }

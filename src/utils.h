@@ -32,7 +32,7 @@
 #define PWD_LEN 128
 // messages parameters lenghts
 #define TITLE_LEN 50
-#define BODY_LEN 200
+#define BODY_LEN 512
 // color codes
 #define RED     "\x1b[31m"
 #define GREEN   "\x1b[32m"
@@ -274,16 +274,6 @@ void iv_comm(int selind, unsigned char* iv, unsigned char* shared_secret, int sh
     unsigned int iv_hmac_len;
     iv_hmac = (unsigned char*)malloc(HMAC_SIZE);
     compute_hmac(iv, 16, shared_secret, shared_secret_len, iv_hmac, &iv_hmac_len);
-    printf("shared_secret_len: %d\n", shared_secret_len);
-    printf("shared_secret: ");
-    for (int i = 0; i < shared_secret_len; i++){
-        printf("%02x", shared_secret[i]);
-    }
-    printf("IV HMAC: ");
-    for (int i = 0; i < iv_hmac_len; i++){
-        printf("%02x", iv_hmac[i]);
-    }
-    printf("\n");
 
     // send the IV HMAC len to the client
     // printf("IV HMAC length: %d\n", iv_hmac_len);
@@ -305,12 +295,6 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
         perror("error receiving IV");
         return -1;
     }
-    // print the received IV
-    printf("Received IV: \n");
-    for (int i = 0; i < 16; i++){
-        printf("%02x", iv[i]);
-    }
-    puts(""); 
     // receive the IV HMAC
     uint32_t iv_hmac_len_n;
     ret = recv(lissoc, (void*)&iv_hmac_len_n, sizeof(uint32_t), 0);
@@ -326,14 +310,6 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
         perror("error receiving IV HMAC");
         return -1;
     }
-    // print the received HMAC
-/*     printf("Received IV HMAC: \n");
-    for (int i = 0; i < iv_hmac_len; i++){
-        printf("%02x", iv_hmac[i]);
-    }
-    printf("\n"); */
-
-
     // compute the HMAC of the IV
     unsigned char* iv_hmac_comp=(unsigned char*)malloc(HMAC_SIZE);
     // check if malloc worked
@@ -341,20 +317,8 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
         perror("malloc failed");
         return -1;
     }
-    //printf("Malloced iv_hmac");
     int iv_hmac_len_comp;
-    printf("shared_secret_len: %ld\n", shared_secret_len);
-    printf("shared_secret: ");
-    for (int i = 0; i < shared_secret_len; i++){
-        printf("%02x", shared_secret[i]);
-    }
-    puts(""); 
     compute_hmac(iv, 16, shared_secret, shared_secret_len, iv_hmac_comp, &iv_hmac_len_comp);
-    printf("Computed IV HMAC: \n");
-    for (int i = 0; i < iv_hmac_len_comp; i++){
-        printf("%02x", iv_hmac_comp[i]);
-    }
-    puts(""); 
     // check if the HMACs are equal
     if (memcmp(iv_hmac, iv_hmac_comp, iv_hmac_len) != 0){
         puts("IV HMACs are different, aborting");

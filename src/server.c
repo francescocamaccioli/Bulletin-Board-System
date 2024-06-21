@@ -23,6 +23,7 @@ int main(int argc, char** argv){
     }
 
     ClientList* clients = create_clientlist();
+    MessageList* messages = create_messagelist();
 
     FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
     checkrnull(server_cert_file, "Failed to open server certificate file");
@@ -469,7 +470,7 @@ int main(int argc, char** argv){
                     //checkreturnint(recv(selind, (void*)&cmd, CMDLEN, 0), "recv of command error");
                         printf("Register request received, in else if\n");
                         ClientNode* current = findclient(clients, selind);
-                        if(current ->hs == 0){
+                        if(current->hs == 0){
                             printf(RED "Client #%d has not completed handshake\n" RESET, selind);
                             checkreturnint(send(selind, (void*)"nohs", CMDLEN, 0), "error sending nohs");
                             continue;
@@ -558,9 +559,8 @@ int main(int argc, char** argv){
                         } 
                     else if (strcmp(cmd, "login") == 0) {
                         printf(YELLOW "Login request received\n" RESET);
-                        unsigned char* login_iv = (unsigned char*)malloc(IV_SIZE);
                         ClientNode* current = findclient(clients, selind);
-                        if(current ->hs == 0){
+                        if(current->hs == 0){
                             printf(RED "Client #%d has not completed handshake\n" RESET, selind);
                             checkreturnint(send(selind, (void*)"nohs", CMDLEN, 0), "error sending nohs");
                             continue;
@@ -570,6 +570,7 @@ int main(int argc, char** argv){
                         memcpy(shared_secret, current->sharedSecret, SHARED_SECRET_LEN);
                         memcpy(AES_256_key, current->sessionKey, AES_KEY_LEN);
                         int shared_secret_len = SHARED_SECRET_LEN;
+                        unsigned char* login_iv = (unsigned char*)malloc(IV_SIZE);
                         receiveIVHMAC(selind, login_iv, shared_secret, shared_secret_len);
                         // receiving ciphertext
                         uint32_t ciphertext_len_n;
@@ -640,6 +641,96 @@ int main(int argc, char** argv){
                         checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
                         free(login_iv);
                         free(ciphertext);
+
+                        continue;
+                    } else if (strcmp(cmd, "list") == 0) {
+                        if(isloggedin(clients, getusername(clients, selind)) == 0){
+                            checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
+                            continue;
+                        }
+                        printf("Listing items...\n");
+                        continue;
+                    } else if (strcmp(cmd, "get") == 0) {
+                        if(isloggedin(clients, getusername(clients, selind)) == 0){
+                            checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
+                            continue;
+                        }
+                        printf("Getting item\n");
+                        continue;
+                    } else if (strcmp(cmd, "add") == 0) {
+                        ClientNode* current = findclient(clients, selind);
+                        if(current->hs == 0){
+                            printf(RED "Client #%d has not completed handshake\n" RESET, selind);
+                            checkreturnint(send(selind, (void*)"nohs", CMDLEN, 0), "error sending nohs");
+                            continue;
+                        }
+                        unsigned char shared_secret[SHARED_SECRET_LEN];
+                        unsigned char AES_256_key[AES_KEY_LEN];
+                        memcpy(shared_secret, current->sharedSecret, SHARED_SECRET_LEN);
+                        memcpy(AES_256_key, current->sessionKey, AES_KEY_LEN);
+                        int shared_secret_len = SHARED_SECRET_LEN;
+                        
+                        unsigned char* add_iv = (unsigned char*)malloc(IV_SIZE);
+                        receiveIVHMAC(selind, add_iv, shared_secret, shared_secret_len);
+
+                        // receiving ciphertext
+                        uint32_t ciphertext_len_n;
+                        checkreturnint(recv(selind, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error receiving ct len");
+                        long ciphertext_len = ntohl(ciphertext_len_n);
+                        unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
+                        checkreturnint(recv(selind, (void*) ciphertext, ciphertext_len, 0), "error receiving ct");
+
+                        // receive HMAC length
+                        uint32_t hmac_len_n;
+                        checkreturnint(recv(selind, (void*)&hmac_len_n, sizeof(uint32_t), 0), "error receiving HMAC length");
+                        long hmac_len = ntohl(hmac_len_n);
+                        unsigned char* recv_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+                        checkreturnint(recv(selind, (void*)recv_hmac, hmac_len, 0), "error receiving HMAC");
+
+                        // compute HMAC of the ciphertext
+                        unsigned char* computed_hmac;
+                        unsigned int computed_hmac_len;
+                        computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+                        compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
+                        
+
+                        if(CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len) != 0){
+                            checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
+                            printf("HMACs do not match, add failed.\n");
+                            continue;
+                        }
+                        else{
+                            printf("HMACs match, add validated\n");
+                        }
+                        free(computed_hmac);
+                        free(recv_hmac);
+
+                        if(isloggedin(clients, getusername(clients, selind)) == 0){
+                            puts("sending notlogged response to client");
+                            checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
+                            continue;
+                        }
+
+                        char* plaintext = malloc(BUF_SIZE);
+                        int plaintext_len;
+                        decrypt_message(ciphertext, ciphertext_len, AES_256_key, add_iv, (unsigned char*)plaintext, &plaintext_len);
+
+                        char* title = strtok(plaintext, ",");
+                        char* body = strtok(NULL, "\0");
+ 
+                        unsigned char* enc_body = malloc(BUF_SIZE);
+                        int enc_body_len;
+                        encrypt_message_AES256ECB((unsigned char*)body, strlen(body), AES_256_key, enc_body, &enc_body_len);
+
+                        // now decrypt it back to test
+                        unsigned char* dec_body = malloc(BUF_SIZE);
+                        int dec_body_len;
+                        decrypt_message_AES256ECB(enc_body, enc_body_len, AES_256_key, dec_body, &dec_body_len);
+
+                        
+                        
+                        free(enc_body);
+                        free(dec_body);
 
                         continue;
                     } else if (strcmp (cmd, "logout") == 0) {
@@ -813,59 +904,25 @@ int main(int argc, char** argv){
                         memcpy(current->sessionKey, AES_256_key, AES_KEY_LEN);
                         free(AES_256_key);
                         current->status = 0;
+                    } else {
+                        printf(RED "Invalid cmd received.\n" RESET);
+                        continue;
                     }
-                    /*else if (strcmp(cmd, "list") == 0) {
-                            if(isloggedin(clients, getusername(clients, selind)) == 0){
-                                checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
-                                continue;
-                            }
-                            printf("Listing items...\n");
-                            continue;
-                        } else if (strcmp(cmd, "get") == 0) {
-                            if(isloggedin(clients, getusername(clients, selind)) == 0){
-                                checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
-                                continue;
-                            }
-                            printf("Getting item\n");
-                            continue;
-                        } else if (strcmp(cmd, "add") == 0) {
-                            if(isloggedin(clients, getusername(clients, selind)) == 0){
-                                checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
-                                continue;
-                            }
-                            printf("Adding item\n");
-
-                            /*
-                            // derive the AES 256 key from the RSA private key by computing its SHA256 hash
-                            unsigned char* AES_256_key;
-                            AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-                            compute_sha256((unsigned char*)rsa_priv_key, sizeof(rsa_priv_key), AES_256_key);
-                            // compute the encryption of the password hash with the derived AES key 
-                            unsigned char* enc_psw = malloc(sizeof(hashedpsw)+16);
-                            int enc_psw_len;
-                            encrypt_message_AES256ECB((unsigned char*)hashedpsw, sizeof(hashedpsw), AES_256_key, enc_psw, &enc_psw_len);
-                            // save encrypted password in structure 
-                            */
-                            /*
-                            continue;
-                        }
-                        */
-                        else {
-                            printf(RED "Invalid cmd received.\n" RESET);
-                            continue;
-                        }
-                    }
-                    /*
-                    FD_CLR(selind, &master);
-                    close(selind);
-                    fflush(stdout);
-                    */
                 }
+                /*
+                FD_CLR(selind, &master);
+                close(selind);
+                fflush(stdout);
+                */
             }
-        }  
+        }
     }
-    /*
     EVP_PKEY_free(server_pub_key);
     X509_free(server_cert);
     free(cert_buf);
-    */
+    free_clientlist(clients);
+    free_messagelist(messages);
+}
+    
+    
+    

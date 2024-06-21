@@ -35,7 +35,7 @@ ClientList* create_clientlist() {
     return list;
 }
 
-int addhs(ClientList* list, int fd, unsigned char* sharedsecret, unsigned char* sesionkey){
+int addhs(ClientList* list, int fd, unsigned char* sharedsecret, unsigned char* skey){
    if(list == NULL){
       perror("list uninitialized.");
       return -1;
@@ -57,10 +57,11 @@ int addhs(ClientList* list, int fd, unsigned char* sharedsecret, unsigned char* 
    printf("\n");
    printf("sessionkey: \n");
    for (int i = 0; i < AES_KEY_LEN; i++) {
-      printf("%02x", sesionkey[i]);
+      printf("%02x", skey[i]);
    }
+   printf("\n");
    memcpy(toadd->sharedSecret, sharedsecret, SHARED_SECRET_LEN);
-   memcpy(toadd->sessionKey, sesionkey, AES_KEY_LEN);
+   memcpy(toadd->sessionKey, skey, AES_KEY_LEN);
 
    if(list->head == NULL || list->tail == NULL){
       list->head = list->tail = toadd;
@@ -270,6 +271,19 @@ char* getusername(ClientList* list, int fd){
    return NULL;
 }
 
+void free_clientlist(ClientList* list) {
+    if (!list) {
+        return;
+    }
+    ClientNode* current = list->head;
+    while (current) {
+        ClientNode* next = current->next;
+        free(current);
+        current = next;
+    }
+    free(list);
+}
+
 
 void printlist(ClientList* list) {
    ClientNode* temp = list->head;
@@ -294,8 +308,8 @@ void printlist(ClientList* list) {
       for (int i = 0; i < SHARED_SECRET_LEN; i++) {
          printf("%02x", temp->sharedSecret[i]);
       }
-      // printing session key as hex
-      printf("Session Key: ");
+      // printing skey key as hex
+      printf("skey Key: ");
       for (int i = 0; i < AES_KEY_LEN; i++) {
          printf("%02x", temp->sessionKey[i]);
       }
@@ -304,23 +318,3 @@ void printlist(ClientList* list) {
       puts("---------------------------------------------------------------");
    }
 }
-
-/*
-int main(void) {
-    ClientList* list = createlist();
-
-    addclient(list, 10, 0);
-    addclient(list, 20, 0);
-    addclient(list, 30, 0);
-    addclient(list, 40, 0);
-    printlist(list);
-
-    removeclient(list, 20);
-    printlist(list);
-
-    removeclient(list, 40);
-    printlist(list);
-
-    return 0;
-}
-*/

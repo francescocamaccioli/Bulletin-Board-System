@@ -267,7 +267,6 @@ int main(int argc, char* argv[]){
 
     shared_secret = (unsigned char*)malloc(shared_secret_len);
     EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
-    printf("shared secret len: %zu\n" , shared_secret_len);
     // Print the shared secret
 /*  printf("Shared secret: \n");
     for (int i = 0; i < shared_secret_len; i++) {
@@ -424,7 +423,7 @@ int main(int argc, char* argv[]){
             char* email = arg;
             char* username = strtok(NULL, " ");
             char* password = strtok(NULL, " ");
-            char* rest = strtok(NULL, "/0");
+            char* rest = strtok(NULL, "\0");
             if(!email || !username || !password){
                 puts("Missing argument!\nUsage: register <email> <username> <password>");
                 continue;
@@ -504,7 +503,7 @@ int main(int argc, char* argv[]){
         } else if (strcmp(input, "login") == 0) {            
             char* username = arg;
             char* password = strtok(NULL, " ");
-            char* rest = strtok(NULL, "/0");
+            char* rest = strtok(NULL, "\0");
             if(!username || !password){
                 puts("Missing argument!\nUsage: login <username> <password>");
                 continue;
@@ -573,7 +572,7 @@ int main(int argc, char* argv[]){
 
         } else if (strcmp(input, "list") == 0) {
             int n = atoi(arg);
-            char* rest = strtok(NULL, "/0");
+            char* rest = strtok(NULL, "\0");
             if(rest){
                 puts("Too many arguments.");
                 continue;
@@ -597,7 +596,7 @@ int main(int argc, char* argv[]){
 
         } else if (strcmp(input, "get") == 0) {
             int mid = atoi(arg);
-            char* rest = strtok(NULL, "/0");
+            char* rest = strtok(NULL, "\0");
             if(rest){
                 puts("Too many arguments.");
                 continue;
@@ -613,8 +612,39 @@ int main(int argc, char* argv[]){
         } else if (strcmp(input, "add") == 0) {
             char* title = arg;
             char* body = strtok(NULL, "\0");
-            char* tosend = malloc(CMDLEN+strlen(title)+strlen(body));
-            snprintf(tosend, CMDLEN+strlen(title)+strlen(body), "%s,%s,%s", "add", title, body);
+            printf("title: %s\n", title);
+            printf("body: %s\n", body);
+            printf("body lenght: %ld\n", strlen(body));
+            char* tosend = malloc(strlen(title)+strlen(body)+3);
+
+            if(!title || !body){
+                puts("Missing argument!\nUsage: add <title> <body>");
+                continue;
+            }
+
+            checkreturnint(send(lissoc, (void*)"add", CMDLEN, 0), "error sending add req");
+            snprintf(tosend, strlen(title)+strlen(body)+3, "%s,%s", title, body);
+            printf("tosend: %s\n", tosend);
+            // generating IV for AES encryption
+            unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
+            // sending it to client with its HMAC
+            iv_comm(lissoc, iv, shared_secret, shared_secret_len);
+            // encrypting with AES CBC mode
+            unsigned char* ciphertext = (unsigned char*)malloc(strlen(tosend) + 16);
+            int ciphertext_len;
+            encrypt_message((unsigned char*)tosend, strlen(tosend), AES_256_key, iv, ciphertext, &ciphertext_len);
+            uint32_t ciphertext_len_n = htonl(ciphertext_len);
+            checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
+            checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
+
+            // computing HMAC over cyphertext
+            unsigned char* hmac_add = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+            unsigned int hmac_add_len;
+            compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_add, &hmac_add_len);
+            // sending HMAC
+            uint32_t hmac_add_len_n = htonl(hmac_add_len);
+            checkreturnint(send(lissoc, (void*)&hmac_add_len_n, sizeof(uint32_t), 0), "error sending hmac len");
+            checkreturnint(send(lissoc, hmac_add, hmac_add_len, 0), "error sending hmac");
 
             checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
             if (strcmp(buffer, "ok") == 0){
@@ -800,7 +830,6 @@ int main(int argc, char* argv[]){
 
             EVP_PKEY_derive(ctx_drv, NULL, &shared_secret_len);
             EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
-            printf("shared secret len: %zu\n" , shared_secret_len);
             // Print the shared secret
         /*  printf("Shared secret: \n");
             for (int i = 0; i < shared_secret_len; i++) {
