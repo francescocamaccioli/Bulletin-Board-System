@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include "utils.h"
 
 typedef struct message{
    int mid;
@@ -25,14 +26,6 @@ Message* create_message(int mid, int ctlen, char* author, char* title, char* bod
     strcpy(message->author, author);
     strcpy(message->title, title);
     strcpy(message->body, body);
-    printf("mid: %d\n", message->mid);
-    printf("ct_len: %d\n", message->ct_len);
-    printf("author: %s\n", message->author);
-    printf("title: %s\n", message->title);
-    printf("body: \n");
-    for (int i = 0; i < message->ct_len; i++){
-        printf("%02x", message->body[i]);
-    }
     message->next = NULL;
     return message;
 
@@ -47,38 +40,48 @@ void insert_message(MessageList* list, Message* message) {
     *list = message;
 }
 
-void get_last_n_messages(MessageList list, const char* author, int n, char* buffer, size_t buffer_size) {
+void getmessage(MessageList list, int mid, char* buffer, size_t buffer_size, unsigned char* key) {
     Message* current = list;
-    Message* author_messages[n];
-    int count = 0;
-
-    // Initialize author_messages array to NULL
-    for (int i = 0; i < n; i++) {
-        author_messages[i] = NULL;
-    }
-
-    // Traverse the list and collect messages from the specified author
     while (current != NULL) {
-        if (strcmp(current->author, author) == 0) {
-            if (count < n) {
-                author_messages[count] = current;
-                count++;
-            } else {
-                for (int i = 0; i < n - 1; i++) {
-                    author_messages[i] = author_messages[i + 1];
-                }
-                author_messages[n - 1] = current;
-            }
+        if (current->mid == mid) {
+            // decrypt the body with AES256 ECB
+            char decrypted_body[BODY_LEN];
+            int decrypted_len;
+            decrypt_message_AES256ECB(current->body, (current->ct_len)+1, key, decrypted_body, &decrypted_len);
+            snprintf(buffer, buffer_size, "Message id: %d\nTitle: %s\nAuthor: %s\nBody: %s\n\n", current->mid, current->title, current->author, decrypted_body);
+            return;
         }
         current = current->next;
     }
+    snprintf(buffer, buffer_size, "Message with id %d not found\n", mid);
+}
 
+void get_last_n_messages(MessageList list, int n, char* buffer, size_t buffer_size, unsigned char* key) {
+    Message* current = list;
+    Message* messages[n];
+    int count = 0;
+
+    // Initialize messages array to NULL
+    for (int i = 0; i < n; i++) {
+        messages[i] = NULL;
+    }
+
+    // Traverse the list and collect the first n messages
+    while (current != NULL && count < n) {
+        messages[count] = current;
+        count++;
+        current = current->next;
+    }
+    printf("count: %d\n", count);
     // Create the output string within the buffer
     buffer[0] = '\0';
     for (int i = 0; i < count; i++) {
-        char temp[256]; // Temporary buffer for each message
-        snprintf(temp, sizeof(temp), "Message id: %d\nTitle: %s\n\n",
-                 author_messages[i]->mid, author_messages[i]->title);
+        char temp[1028]; // Temporary buffer for each message
+        // decrypt the body with AES256 ECB
+        char decrypted_body[BODY_LEN];
+        int decrypted_len;
+        decrypt_message_AES256ECB(messages[i]->body, (messages[i]->ct_len)+1, key, decrypted_body, &decrypted_len);
+        snprintf(temp, sizeof(temp), "Message id: %d\nTitle: %s\nAuthor: %s\nBody: %s\n\n", messages[i]->mid, messages[i]->title, messages[i]->author, decrypted_body);
         if (strlen(buffer) + strlen(temp) + 1 > buffer_size) {
             // Prevent buffer overflow
             fprintf(stderr, "Buffer size exceeded\n");
@@ -109,7 +112,6 @@ void print_messagelist(MessageList* list) {
     Message* current = list;
     while (current) {
         printf("Message ID: %d\n", current->mid);
-        printf("Creation Time: %d\n", current->ct_len);
         printf("Author: %s\n", current->author);
         printf("Title: %s\n", current->title);
         printf("Body: ");

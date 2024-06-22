@@ -72,12 +72,6 @@ void encrypt_message_AES256ECB(unsigned char* message, int message_len, unsigned
     EVP_EncryptFinal(ctx, ciphertext + outlen, &outlen);
     *ciphertext_len += outlen;
     EVP_CIPHER_CTX_free(ctx);
-    printf("Encrypted message: ");
-    for (int i = 0; i < *ciphertext_len; i++){
-        printf("%02x", ciphertext[i]);
-    }
-    printf("\n");
-
 }
 
 // function to decrypt a message using AES 256 ECB
@@ -91,7 +85,6 @@ void decrypt_message_AES256ECB(unsigned char* ciphertext, int ciphertext_len, un
     EVP_DecryptFinal(ctx, plaintext + outlen, &outlen);
     *plaintext_len += outlen;
     EVP_CIPHER_CTX_free(ctx);
-    printf("Decrypted message: %s\n", plaintext);
 }
 
 // create timestamp string
@@ -268,12 +261,6 @@ void iv_comm(int selind, unsigned char* iv, unsigned char* shared_secret, int sh
 
     // send the IV to the client
     checkreturnint(send(selind, (void*)iv, 16, 0), "error sending IV");
-    // print the IV
-    printf("IV: ");
-    for (int i = 0; i < 16; i++){
-        printf("%02x", iv[i]);
-    }
-    printf("IV sent\n"); 
  
     // generate the IV HMAC
     unsigned char* iv_hmac;

@@ -571,6 +571,10 @@ int main(int argc, char* argv[]){
             }
 
         } else if (strcmp(input, "list") == 0) {
+            if(!arg){
+                puts("Missing argument!\nUsage: list <n>");
+                continue;
+            }
             int n = atoi(arg);
             char* rest = strtok(NULL, "\0");
             if(rest){
@@ -582,20 +586,89 @@ int main(int argc, char* argv[]){
                 puts("Invalid n, try again");
                 continue;
             }
-            char* tosend = malloc(CMDLEN+sizeof(n));
-            snprintf(tosend, CMDLEN+sizeof(n), "%s,%d", "list", n);
-            
             checkreturnint(send(lissoc, (void*)"list", CMDLEN, 0), "error sending login");
-            //checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
-            if (strcmp(buffer, "ok") == 0){
-                puts("Message added successfully!");
-            } else if (strcmp(buffer, "notlogged") == 0){
+            char* tosend = malloc(12);
+            if (tosend == NULL) {
+                fprintf(stderr, "Memory allocation failed\n");
+                return 1;
+            }
+            snprintf(tosend, 12, "%d", n);
+
+            // generating IV for AES encryption
+            unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
+            // sending it to client with its HMAC
+            iv_comm(lissoc, iv, shared_secret, shared_secret_len);
+            // encrypting with AES CBC mode
+            unsigned char* ciphertext = (unsigned char*)malloc(sizeof(n) + 16);
+            int ciphertext_len;
+            encrypt_message((unsigned char*)tosend, sizeof(n), AES_256_key, iv, ciphertext, &ciphertext_len);
+            uint32_t ciphertext_len_n = htonl(ciphertext_len);
+            checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
+            checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
+
+            // computing HMAC over cyphertext
+            unsigned char* hmac_list = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+            unsigned int hmac_list_len;
+            compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_list, &hmac_list_len);
+            // sending HMAC
+            uint32_t hmac_list_len_n = htonl(hmac_list_len);
+            checkreturnint(send(lissoc, (void*)&hmac_list_len_n, sizeof(uint32_t), 0), "error sending hmac len");
+            checkreturnint(send(lissoc, hmac_list, hmac_list_len, 0), "error sending hmac");
+            free(tosend);
+
+            char* response = (char*)malloc(CMDLEN);
+            // receiving response from server
+            checkreturnint(recv(lissoc, (void*)response, BUF_SIZE, 0), "error receiving response");
+
+            if (strcmp(response, "ok") == 0){
+                puts("List request accepted!");
+                
+                // receiving IV for AES decryption
+                unsigned char* iv_list = (unsigned char*)malloc(IV_SIZE);
+                receiveIVHMAC(lissoc, iv_list, shared_secret, shared_secret_len);
+
+                // receiving cyphertext lenght
+                uint32_t ctlen;
+                checkreturnint(recv(lissoc, (void*)&ctlen, sizeof(uint32_t), 0), "error receiving ctlen");
+                int ctlen_n = ntohl(ctlen);
+                unsigned char* ct = (unsigned char*)malloc(ctlen_n);
+                checkreturnint(recv(lissoc, (void*)ct, ctlen_n, 0), "error receiving ct");
+                // receiving HMAC length
+                uint32_t hmac_len;
+                checkreturnint(recv(lissoc, (void*)&hmac_len, sizeof(uint32_t), 0), "error receiving hmac len");
+                int hmac_len_n = ntohl(hmac_len);
+                unsigned char* hmac_list = (unsigned char*)malloc(hmac_len_n);
+                checkreturnint(recv(lissoc, (void*)hmac_list, hmac_len_n, 0), "error receiving hmac");
+
+                // computing HMAC over cyphertext
+                unsigned char* hmac_list_check = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+                unsigned int hmac_list_check_len;
+                compute_hmac((unsigned char*)ct, ctlen_n, shared_secret, shared_secret_len, hmac_list_check, &hmac_list_check_len);
+                // checking if HMAC is correct
+                if (memcmp(hmac_list, hmac_list_check, hmac_len_n) != 0){
+                    puts("HMAC check failed, aborting.");
+                    continue;
+                }
+                // decrypting the message
+                unsigned char* plaintext = (unsigned char*)malloc(ctlen_n);
+                int plaintext_len;
+                decrypt_message(ct, ctlen_n, AES_256_key, iv_list, plaintext, &plaintext_len);
+                // printing the message
+                printf("Latest %d Messages in BBS:\n%s", n, plaintext);
+                free(hmac_list_check);
+                free(iv_list);
+            } else if (strcmp(response, "notlogged") == 0){
                 puts("You need to login first!");
             } else {
-                puts("Message add failed, try again.");
+                puts("list failed, try again.");
             }
-
+            free(response);
+            free(hmac_list);
         } else if (strcmp(input, "get") == 0) {
+            if(!arg){
+                puts("Missing argument!\nUsage: get <mid>");
+                continue;
+            }
             int mid = atoi(arg);
             char* rest = strtok(NULL, "\0");
             if(rest){
@@ -606,27 +679,106 @@ int main(int argc, char* argv[]){
                 puts("Invalid mid, try again");
                 continue;
             }
-            char* tosend = malloc(CMDLEN+sizeof(mid));
-            snprintf(tosend, CMDLEN+sizeof(mid), "%s,%s", "get", arg);
-            
+            checkreturnint(send(lissoc, (void*)"get", CMDLEN, 0), "error sending get req");
+            char* tosend = malloc(12);
+            if (tosend == NULL) {
+                fprintf(stderr, "Memory allocation failed\n");
+                return 1;
+            }
+            snprintf(tosend, 12, "%d", mid);
+
+            // generating IV for AES encryption
+            unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
+            // sending it to client with its HMAC
+            iv_comm(lissoc, iv, shared_secret, shared_secret_len);
+            // encrypting with AES CBC mode
+            unsigned char* ciphertext = (unsigned char*)malloc(sizeof(mid) + 16);
+            int ciphertext_len;
+            encrypt_message((unsigned char*)tosend, sizeof(mid), AES_256_key, iv, ciphertext, &ciphertext_len);
+            uint32_t ciphertext_len_n = htonl(ciphertext_len);
+            checkreturnint(send(lissoc, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error sending ctlen");
+            checkreturnint(send(lissoc, ciphertext, ciphertext_len, 0), "error sending ct");
+
+            // computing HMAC over cyphertext
+            unsigned char* hmac_get = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+            unsigned int hmac_get_len;
+            compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_get, &hmac_get_len);
+            // sending HMAC
+            uint32_t hmac_get_len_n = htonl(hmac_get_len);
+            checkreturnint(send(lissoc, (void*)&hmac_get_len_n, sizeof(uint32_t), 0), "error sending hmac len");
+            checkreturnint(send(lissoc, hmac_get, hmac_get_len, 0), "error sending hmac");
+            free(tosend);
+
+            char* response = (char*)malloc(CMDLEN);
+            // receiving response from server
+            checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
+
+            if(strcmp(response, "ok") == 0){
+                puts("Get request accepted!");
+                // receiving IV for AES decryption
+                unsigned char* iv_get = (unsigned char*)malloc(IV_SIZE);
+                receiveIVHMAC(lissoc, iv_get, shared_secret, shared_secret_len);
+
+                // receiving cyphertext lenght
+                uint32_t ctlen;
+                checkreturnint(recv(lissoc, (void*)&ctlen, sizeof(uint32_t), 0), "error receiving ctlen");
+                int ctlen_n = ntohl(ctlen);
+                unsigned char* ct = (unsigned char*)malloc(ctlen_n);
+                checkreturnint(recv(lissoc, (void*)ct, ctlen_n, 0), "error receiving ct");
+                // receiving HMAC length
+                uint32_t hmac_len;
+                checkreturnint(recv(lissoc, (void*)&hmac_len, sizeof(uint32_t), 0), "error receiving hmac len");
+                int hmac_len_n = ntohl(hmac_len);
+                unsigned char* hmac_get = (unsigned char*)malloc(hmac_len_n);
+                checkreturnint(recv(lissoc, (void*)hmac_get, hmac_len_n, 0), "error receiving hmac");
+
+                // computing HMAC over cyphertext
+                unsigned char* hmac_get_check = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+                unsigned int hmac_get_check_len;
+                compute_hmac((unsigned char*)ct, ctlen_n, shared_secret, shared_secret_len, hmac_get_check, &hmac_get_check_len);
+                // checking if HMAC is correct
+                if (memcmp(hmac_get, hmac_get_check, hmac_len_n) != 0){
+                    puts("HMAC check failed, aborting.");
+                    continue;
+                }
+                // decrypting the message
+                unsigned char* plaintext = (unsigned char*)malloc(ctlen_n);
+                int plaintext_len;
+                decrypt_message(ct, ctlen_n, AES_256_key, iv_get, plaintext, &plaintext_len);
+                
+                // write the message to a file
+                FILE* f = fopen("messages.txt", "a");
+                if (f == NULL){
+                    perror("Error opening file");
+                    exit(EXIT_FAILURE);
+                }
+                fprintf(f, "%s", plaintext);
+                fclose(f);
+                puts("Message saved to messages.txt");
+                free(hmac_get_check);
+                free(iv_get);
+            } else if (strcmp(response, "notlogged") == 0){
+                puts("You need to login first!");
+            } else {
+                puts("Get failed, try again.");
+            }
+
+            free(response);
+            free(hmac_get);
             
         } else if (strcmp(input, "add") == 0) {
             char* title = arg;
             char* body = strtok(NULL, "\0");
-            printf("title: %s\n", title);
-            printf("body: %s\n", body);
-            printf("body lenght: %ld\n", strlen(body));
-            char* tosend = malloc(strlen(title)+strlen(body)+3);
-
+            
             if(!title || !body){
                 puts("Missing argument!\nUsage: add <title> <body>");
                 continue;
             }
 
+            char* tosend = malloc(strlen(title)+strlen(body)+3);
             checkreturnint(send(lissoc, (void*)"add", CMDLEN, 0), "error sending add req");
             int total_len = strlen(title)+strlen(body)+3;
             snprintf(tosend, total_len, "%s,%s", title, body);
-            printf("tosend: %s\n", tosend);
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
             // sending it to client with its HMAC
