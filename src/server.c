@@ -497,19 +497,18 @@ int main(int argc, char** argv){
                         printf(YELLOW "Register request received\n" RESET);
                         unsigned char* reg_iv = (unsigned char*)malloc(IV_SIZE);
                         receiveIVHMAC(selind, reg_iv, shared_secret, shared_secret_len);
-                        // receiving ciphertext
-                        uint32_t ciphertext_len_n;
-                        checkreturnint(recv(selind, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error receiving ct len");
-                        long ciphertext_len = ntohl(ciphertext_len_n);
+                        // receiving concatenated reg message
+                        uint32_t buflen_n;
+                        checkreturnint(recv(selind, (void*)&buflen_n, sizeof(uint32_t), 0), "error receiving buflen");
+                        long buflen = ntohl(buflen_n);
+                        printf("buflen: %ld\n", buflen);
+                        int ciphertext_len = buflen - HMAC_SIZE;
+                        unsigned char* conc_buf = (unsigned char*)malloc(buflen);
+                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
-                        checkreturnint(recv(selind, (void*) ciphertext, ciphertext_len, 0), "error receiving ct");
-
-                        // receive HMAC length
-                        uint32_t hmac_len_n;
-                        checkreturnint(recv(selind, (void*)&hmac_len_n, sizeof(uint32_t), 0), "error receiving HMAC length");
-                        long hmac_len = ntohl(hmac_len_n);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
-                        checkreturnint(recv(selind, (void*)recv_hmac, hmac_len, 0), "error receiving HMAC");
+                        checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
+                        split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
+                        free(conc_buf);
 
                         // compute HMAC of the ciphertext
                         unsigned char* computed_hmac;
@@ -586,18 +585,17 @@ int main(int argc, char** argv){
                         unsigned char* login_iv = (unsigned char*)malloc(IV_SIZE);
                         receiveIVHMAC(selind, login_iv, shared_secret, shared_secret_len);
                         // receiving ciphertext
-                        uint32_t ciphertext_len_n;
-                        checkreturnint(recv(selind, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error receiving ct len");
-                        long ciphertext_len = ntohl(ciphertext_len_n);
+                        uint32_t buflen_n;
+                        checkreturnint(recv(selind, (void*)&buflen_n, sizeof(uint32_t), 0), "error receiving buflen");
+                        long buflen = ntohl(buflen_n);
+                        printf("buflen: %ld\n", buflen);
+                        int ciphertext_len = buflen - HMAC_SIZE;
+                        unsigned char* conc_buf = (unsigned char*)malloc(buflen);
+                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
-                        checkreturnint(recv(selind, (void*) ciphertext, ciphertext_len, 0), "error receiving ct");
-
-                        // receive HMAC length
-                        uint32_t hmac_len_n;
-                        checkreturnint(recv(selind, (void*)&hmac_len_n, sizeof(uint32_t), 0), "error receiving HMAC length");
-                        long hmac_len = ntohl(hmac_len_n);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
-                        checkreturnint(recv(selind, (void*)recv_hmac, hmac_len, 0), "error receiving HMAC");
+                        checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
+                        split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
+                        free(conc_buf);
 
                         // compute HMAC of the ciphertext
                         unsigned char* computed_hmac;
@@ -680,18 +678,17 @@ int main(int argc, char** argv){
                         receiveIVHMAC(selind, list_iv, shared_secret, shared_secret_len);
 
                         // receive ciphertext length & ciphertext
-                        uint32_t ciphertext_len_n;
-                        checkreturnint(recv(selind, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error receiving ct len");
-                        long ciphertext_len = ntohl(ciphertext_len_n);
+                        uint32_t buflen_n;
+                        checkreturnint(recv(selind, (void*)&buflen_n, sizeof(uint32_t), 0), "error receiving buflen");
+                        long buflen = ntohl(buflen_n);
+                        printf("buflen: %ld\n", buflen);
+                        int ciphertext_len = buflen - HMAC_SIZE;
+                        unsigned char* conc_buf = (unsigned char*)malloc(buflen);
+                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
-                        checkreturnint(recv(selind, (void*)ciphertext, ciphertext_len, 0), "error receiving ct");
-
-                        // receive HMAC length
-                        uint32_t hmac_len_n;
-                        checkreturnint(recv(selind, (void*)&hmac_len_n, sizeof(uint32_t), 0), "error receiving HMAC length");
-                        long hmac_len = ntohl(hmac_len_n);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
-                        checkreturnint(recv(selind, (void*)recv_hmac, hmac_len, 0), "error receiving HMAC");
+                        checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
+                        split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
+                        free(conc_buf);
 
                         // compute HMAC of the ciphertext
                         unsigned char* computed_hmac;
@@ -721,37 +718,33 @@ int main(int argc, char** argv){
                         }
                         
                         checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
+                        iv_comm(selind, list_iv, shared_secret, shared_secret_len);
 
-                        unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
-                        iv_comm(selind, iv, shared_secret, shared_secret_len);
 
                         char buffer[BUF_SIZE];
                         get_last_n_messages(messages, n, buffer, BUF_SIZE, srv_AES_256_key);
-                        
+                        printf("buffer: %s\n", buffer);
                         unsigned char* enc_buffer = (unsigned char*)malloc(BUF_SIZE*n+16);
                         int enc_buffer_len;
                         // encrypting buffer with AES CBC to send it to client
-                        encrypt_message(buffer, strlen(buffer)+1, AES_256_key, iv, enc_buffer, &enc_buffer_len);
-                        // send the encrypted buffer length to the client
-                        uint32_t enc_buffer_len_n = htonl(enc_buffer_len);
-                        checkreturnint(send(selind, (void*)&enc_buffer_len_n, sizeof(uint32_t), 0), "error sending encrypted buffer length");
-                        // send the encrypted buffer to the client
-                        checkreturnint(send(selind, (void*)enc_buffer, enc_buffer_len, 0), "error sending encrypted buffer");
-                        
-                        // computing HMAC of the encrypted buffer
+                        encrypt_message(buffer, strlen(buffer)+1, AES_256_key, list_iv, enc_buffer, &enc_buffer_len);
                         unsigned char* encbuffer_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                         unsigned int encbuffer_hmac_len;
                         compute_hmac(enc_buffer, enc_buffer_len, shared_secret, shared_secret_len, encbuffer_hmac, &encbuffer_hmac_len);
-                        // send the HMAC length to the client
-                        uint32_t encbuffer_hmac_len_n = htonl(encbuffer_hmac_len);
-                        checkreturnint(send(selind, (void*)&encbuffer_hmac_len_n, sizeof(uint32_t), 0), "error sending HMAC length");
-                        // send the HMAC to the client
-                        checkreturnint(send(selind, (void*)encbuffer_hmac, encbuffer_hmac_len, 0), "error sending HMAC");
+                        long sendlen = HMAC_SIZE + enc_buffer_len;
+                        printf("sendlen: %ld\n", sendlen);
+                        uint32_t sendlen_n = htonl(sendlen);
+                        unsigned char sendbuf[sendlen];
+                        concatenate_hmac_ciphertext(encbuffer_hmac, enc_buffer, enc_buffer_len, sendbuf);
+
+                        checkreturnint(send(selind, (void*)&sendlen_n, sizeof(uint32_t), 0), "error sending sendlen");
+                        checkreturnint(send(selind, sendbuf, sendlen, 0), "error sending sendbuf");
+                        
+                       
                         free(ciphertext);
                         free(list_iv);
                         free(encbuffer_hmac);
                         free(enc_buffer);
-                        free(iv);
                         free(computed_hmac);
                         free(recv_hmac);
                         free(plaintext);
@@ -775,18 +768,17 @@ int main(int argc, char** argv){
                         receiveIVHMAC(selind, get_iv, shared_secret, shared_secret_len);
 
                         // receive ciphertext length & ciphertext
-                        uint32_t ciphertext_len_n;
-                        checkreturnint(recv(selind, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error receiving ct len");
-                        long ciphertext_len = ntohl(ciphertext_len_n);
+                        uint32_t buflen_n;
+                        checkreturnint(recv(selind, (void*)&buflen_n, sizeof(uint32_t), 0), "error receiving buflen");
+                        long buflen = ntohl(buflen_n);
+                        printf("buflen: %ld\n", buflen);
+                        int ciphertext_len = buflen - HMAC_SIZE;
+                        unsigned char* conc_buf = (unsigned char*)malloc(buflen);
+                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
-                        checkreturnint(recv(selind, (void*)ciphertext, ciphertext_len, 0), "error receiving ct");
-
-                        // receive HMAC length
-                        uint32_t hmac_len_n;
-                        checkreturnint(recv(selind, (void*)&hmac_len_n, sizeof(uint32_t), 0), "error receiving HMAC length");
-                        long hmac_len = ntohl(hmac_len_n);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
-                        checkreturnint(recv(selind, (void*)recv_hmac, hmac_len, 0), "error receiving HMAC");
+                        checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
+                        split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
+                        free(conc_buf);
 
                         // compute HMAC of the ciphertext
                         unsigned char* computed_hmac;
@@ -833,21 +825,17 @@ int main(int argc, char** argv){
                         int enc_buffer_len;
                         // encrypting buffer with AES CBC to send it to client
                         encrypt_message(buffer, strlen(buffer)+1, AES_256_key, iv, enc_buffer, &enc_buffer_len);
-                        // send the encrypted buffer length to the client
-                        uint32_t enc_buffer_len_n = htonl(enc_buffer_len);
-                        checkreturnint(send(selind, (void*)&enc_buffer_len_n, sizeof(uint32_t), 0), "error sending encrypted buffer length");
-                        // send the encrypted buffer to the client
-                        checkreturnint(send(selind, (void*)enc_buffer, enc_buffer_len, 0), "error sending encrypted buffer");
-
-                        // computing HMAC of the encrypted buffer
                         unsigned char* encbuffer_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                         unsigned int encbuffer_hmac_len;
                         compute_hmac(enc_buffer, enc_buffer_len, shared_secret, shared_secret_len, encbuffer_hmac, &encbuffer_hmac_len);
-                        // send the HMAC length to the client
-                        uint32_t encbuffer_hmac_len_n = htonl(encbuffer_hmac_len);
-                        checkreturnint(send(selind, (void*)&encbuffer_hmac_len_n, sizeof(uint32_t), 0), "error sending HMAC length");
-                        // send the HMAC to the client
-                        checkreturnint(send(selind, (void*)encbuffer_hmac, encbuffer_hmac_len, 0), "error sending HMAC");
+                        long sendlen = HMAC_SIZE + enc_buffer_len;
+                        printf("sendlen: %ld\n", sendlen);
+                        uint32_t sendlen_n = htonl(sendlen);
+                        unsigned char sendbuf[sendlen];
+                        concatenate_hmac_ciphertext(encbuffer_hmac, enc_buffer, enc_buffer_len, sendbuf);
+
+                        checkreturnint(send(selind, (void*)&sendlen_n, sizeof(uint32_t), 0), "error sending sendlen");
+                        checkreturnint(send(selind, sendbuf, sendlen, 0), "error sending sendbuf");
                         free(encbuffer_hmac);
                         free(enc_buffer);
                         free(iv);
@@ -870,19 +858,18 @@ int main(int argc, char** argv){
                         receiveIVHMAC(selind, add_iv, shared_secret, shared_secret_len);
 
                         // receiving ciphertext
-                        uint32_t ciphertext_len_n;
-                        checkreturnint(recv(selind, (void*)&ciphertext_len_n, sizeof(uint32_t), 0), "error receiving ct len");
-                        long ciphertext_len = ntohl(ciphertext_len_n);
+                        uint32_t buflen_n;
+                        checkreturnint(recv(selind, (void*)&buflen_n, sizeof(uint32_t), 0), "error receiving buflen");
+                        long buflen = ntohl(buflen_n);
+                        printf("buflen: %ld\n", buflen);
+                        int ciphertext_len = buflen - HMAC_SIZE;
+                        unsigned char* conc_buf = (unsigned char*)malloc(buflen);
+                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
-                        checkreturnint(recv(selind, (void*) ciphertext, ciphertext_len, 0), "error receiving ct");
-
-                        // receive HMAC length
-                        uint32_t hmac_len_n;
-                        checkreturnint(recv(selind, (void*)&hmac_len_n, sizeof(uint32_t), 0), "error receiving HMAC length");
-                        long hmac_len = ntohl(hmac_len_n);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
-                        checkreturnint(recv(selind, (void*)recv_hmac, hmac_len, 0), "error receiving HMAC");
-
+                        checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
+                        split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
+                        free(conc_buf);
+                        
                         // compute HMAC of the ciphertext
                         unsigned char* computed_hmac;
                         unsigned int computed_hmac_len;

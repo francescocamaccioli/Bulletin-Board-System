@@ -54,6 +54,23 @@ void checkreturnint(int ret, char* msg){
    }
 }
 
+// function to concatenate the HMAC and the ciphertext in a single buffer
+void concatenate_hmac_ciphertext(unsigned char* hmac, unsigned char* ciphertext, int ciphertext_size, unsigned char* buffer) {
+    // Copy the HMAC to the beginning of the buffer
+    memcpy(buffer, hmac, HMAC_SIZE);
+    // Copy the ciphertext right after the HMAC in the buffer
+    memcpy(buffer + HMAC_SIZE, ciphertext, ciphertext_size);
+}
+
+// function to split the HMAC and the ciphertext from a single buffer
+void split_hmac_ciphertext(unsigned char* buffer, unsigned char* hmac, unsigned char* ciphertext, int ciphertext_size) {
+    // Copy the HMAC from the beginning of the buffer
+    memcpy(hmac, buffer, HMAC_SIZE);
+    // Copy the ciphertext right after the HMAC in the buffer
+    memcpy(ciphertext, buffer + HMAC_SIZE, ciphertext_size);
+}
+
+
 void checkrnull(void* ret, char* msg){
    if(!ret){
       perror(msg);
@@ -268,21 +285,23 @@ void iv_comm(int selind, unsigned char* iv, unsigned char* shared_secret, int sh
 
     // send the IV to the client
     checkreturnint(send(selind, (void*)iv, 16, 0), "error sending IV");
- 
+    printf("IV sent: \n");
+    for (int i = 0; i < 16; i++){
+        printf("%02x", iv[i]);
+    }
+    printf("\n");
     // generate the IV HMAC
     unsigned char* iv_hmac;
     unsigned int iv_hmac_len;
     iv_hmac = (unsigned char*)malloc(HMAC_SIZE);
     compute_hmac(iv, 16, shared_secret, shared_secret_len, iv_hmac, &iv_hmac_len);
-
-    // send the IV HMAC len to the client
-    // printf("IV HMAC length: %d\n", iv_hmac_len);
-    uint32_t iv_hmac_len_n = htonl(iv_hmac_len);
-    checkreturnint(send(selind, (void*)&iv_hmac_len_n, sizeof(uint32_t), 0), "error sending IV HMAC length");
-    //printf("IV HMAC length sent\n");
-
+    printf("computed IV HMAC: \n");
+    for (int i = 0; i < iv_hmac_len; i++){
+        printf("%02x", iv_hmac[i]);
+    }
+    printf("\n");
     // send the IV HMAC to the client
-    checkreturnint(send(selind, (void*)iv_hmac, iv_hmac_len, 0), "error sending IV HMAC");
+    checkreturnint(send(selind, (void*)iv_hmac, HMAC_SIZE, 0), "error sending IV HMAC");
     //printf("IV HMAC sent\n");
     free(iv_hmac);
 }
@@ -295,20 +314,21 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
         perror("error receiving IV");
         return -1;
     }
-    // receive the IV HMAC
-    uint32_t iv_hmac_len_n;
-    ret = recv(lissoc, (void*)&iv_hmac_len_n, sizeof(uint32_t), 0);
-    if (ret < 0){
-        perror("error receiving IV HMAC length");
-        return -1;
+    printf("received IV: \n");
+    for (int i = 0; i < 16; i++){
+        printf("%02x", iv[i]);
     }
-    long iv_hmac_len = ntohl(iv_hmac_len_n);
-    //printf("iv_hmac_len: %ld\n", iv_hmac_len);
-    unsigned char* iv_hmac = malloc(iv_hmac_len);
-    ret = recv(lissoc, (void*)iv_hmac, iv_hmac_len, 0);
+    printf("\n");
+    // receive the IV HMAC
+    unsigned char* iv_hmac = malloc(HMAC_SIZE);
+    ret = recv(lissoc, (void*)iv_hmac, HMAC_SIZE, 0);
     if (ret < 0){
         perror("error receiving IV HMAC");
         return -1;
+    }
+    printf("received IV HMAC: \n");
+    for (int i = 0; i < HMAC_SIZE; i++){
+        printf("%02x", iv_hmac[i]);
     }
     // compute the HMAC of the IV
     unsigned char* iv_hmac_comp=(unsigned char*)malloc(HMAC_SIZE);
@@ -320,7 +340,12 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
     int iv_hmac_len_comp;
     compute_hmac(iv, 16, shared_secret, shared_secret_len, iv_hmac_comp, &iv_hmac_len_comp);
     // check if the HMACs are equal
-    if (memcmp(iv_hmac, iv_hmac_comp, iv_hmac_len) != 0){
+    printf("computed IV HMAC: \n");
+    for (int i = 0; i < iv_hmac_len_comp; i++){
+        printf("%02x", iv_hmac_comp[i]);
+    }
+    printf("\n");
+    if (memcmp(iv_hmac, iv_hmac_comp, HMAC_SIZE) != 0){
         puts("IV HMACs are different, aborting");
         return -1;
     }
