@@ -50,16 +50,6 @@ int addhs(ClientList* list, int fd, unsigned char* sharedsecret, unsigned char* 
    toadd->status = 0;
    toadd->hs = 1;
    toadd->next = NULL;
-   printf("sharedsecret: \n");
-   for (int i = 0; i < SHARED_SECRET_LEN; i++) {
-      printf("%02x", sharedsecret[i]);
-   }
-   printf("\n");
-   printf("sessionkey: \n");
-   for (int i = 0; i < AES_KEY_LEN; i++) {
-      printf("%02x", skey[i]);
-   }
-   printf("\n");
    memcpy(toadd->sharedSecret, sharedsecret, SHARED_SECRET_LEN);
    memcpy(toadd->sessionKey, skey, AES_KEY_LEN);
 
@@ -108,10 +98,10 @@ int addinfo(ClientList* list, int fd, char* username, char* email, char* hashedp
       perror("Client not found.");
       return -1;
    }
-   strncpy(toadd->email, email, sizeof(toadd->email) - 1);
-   strncpy(toadd->username, username, sizeof(toadd->username) - 1);
-   strncpy(toadd->hashedpsw, hashedpassword, sizeof(toadd->hashedpsw) - 1);
-   strncpy(toadd->salt, salt, sizeof(toadd->salt) - 1);
+   strncpy(toadd->email, email, EMAIL_LEN);
+   strncpy(toadd->username, username, USERNAME_LEN);
+   strncpy(toadd->hashedpsw, hashedpassword, HASH_SIZE);
+   strncpy(toadd->salt, salt, SALT_LEN);
    return 0;
 }
 
@@ -204,6 +194,24 @@ int isin(ClientList* list, char* username){
       temp = temp->next;
    }
    return -1;
+}
+
+int checkpwd(ClientNode* client, unsigned char* hashed_pwd){
+   if (client == NULL || hashed_pwd == NULL){
+      return 1;
+   }
+
+   ClientNode* temp = client;
+
+   // retrieve user's salt and hash the hashed password with it
+   unsigned char* salted_pwd = malloc(HASH_SIZE);
+   compute_sha256_salted(hashed_pwd, strlen(hashed_pwd), salted_pwd, temp->salt);
+
+   // compare the hashed password with the stored one
+   if (memcmp(salted_pwd, temp->hashedpsw, HASH_SIZE) == 0){
+      return 0;
+   }
+   return 1;
 }
 
 int isloggedin(ClientList* list, char* username){

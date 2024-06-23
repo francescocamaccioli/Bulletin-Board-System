@@ -59,13 +59,6 @@ int main(int argc, char** argv){
     compute_sha256(rsa_priv_key_buf, rsa_priv_key_len, srv_AES_256_key);
     free(rsa_priv_key_buf);
 
-    //print the server private key
-    printf("Server private key: \n");
-    for (int i = 0; i < EVP_MD_size(EVP_sha256()); i++){
-        printf("%02x", srv_AES_256_key[i]);
-    }
-
-
     RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
     if (rsa) {
         //printf("RSA Public Key:\n");
@@ -436,14 +429,10 @@ int main(int argc, char** argv){
                         int dec_struct_len;
                         decrypt_message(enc_struct, enc_struct_len, AES_256_key, received_iv, dec_struct, &dec_struct_len);
                         
-                        free(enc_struct);
                         // free(received_iv);
                         
-
-
                         MessageAuth recv_auth;
                         memcpy(&recv_auth, dec_struct, sizeof(recv_auth));
-                        free(dec_struct);
 
                         // print the decrypted structure
                         /* printf("Decrypted structure: \n");
@@ -481,8 +470,10 @@ int main(int argc, char** argv){
                         else{
                             printf(RED "HMACs do not match, connection aborted\n" RESET);
                         }
+                        free(received_iv);
+                        free(enc_struct);
+                        free(dec_struct);
                         free(computed_hmac_nonce);
-                        free(AES_256_key);
                     }
                     else if (strcmp(cmd,"register")==0){
                     //checkreturnint(recv(selind, (void*)&cmd, CMDLEN, 0), "recv of command error");
@@ -550,7 +541,7 @@ int main(int argc, char** argv){
                             checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
                             continue;
                         }
-
+                        
                         if(isin(clients, username) == 1){
                             printf(RED "User \"%s\" already registered.\n" RESET, username);
                             checkreturnint(send(selind, (void*)"exists", CMDLEN, 0), "error sending fail");
@@ -566,7 +557,11 @@ int main(int argc, char** argv){
                         checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
                         
                         char* salt = malloc(SALT_LEN);
-                        char* salted_hashedpwd = malloc(HASH_SIZE);
+                        if (!RAND_bytes((unsigned char*) salt, SALT_LEN)) {
+                            perror("RAND_bytes failed");
+                            exit(EXIT_FAILURE);
+                        }
+                        unsigned char* salted_hashedpwd = malloc(HASH_SIZE);
                         compute_sha256_salted((unsigned char*)hashedpsw, strlen(hashedpsw),salted_hashedpwd, salt);
                         checkreturnint(addinfo(clients, selind, username, email, salted_hashedpwd, salt), "addinfo error");
                         printlist(clients);
@@ -647,6 +642,12 @@ int main(int argc, char** argv){
                             continue;
                         }
 
+                        if(checkpwd(current, hashedpsw) == 1){
+                            printf(RED "Password for user \"%s\" is incorrect.\n" RESET, username);
+                            checkreturnint(send(selind, (void*)"wrongpsw", CMDLEN, 0), "error sending fail");
+                            continue;
+                        }
+
                         if(checktimestamp(recv_timestamp) == 1){
                             checkreturnint(send(selind, (void*)"timeout", CMDLEN, 0), "error sending fail");
                             continue;
@@ -707,18 +708,12 @@ int main(int argc, char** argv){
                             printf("HMACs match, list validated\n");
                         }
 
-                        free(computed_hmac);
-                        free(recv_hmac);
-
                         // decrypt the ciphertext
                         char* plaintext = malloc(12);
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, list_iv, (unsigned char*)plaintext, &plaintext_len);
-                        free(ciphertext);
-                        free(list_iv);
-
+                        
                         int n = atoi(plaintext);
-                        free(plaintext);
 
                         if(isloggedin(clients, getusername(clients, selind)) == 0){
                             checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
@@ -752,10 +747,14 @@ int main(int argc, char** argv){
                         checkreturnint(send(selind, (void*)&encbuffer_hmac_len_n, sizeof(uint32_t), 0), "error sending HMAC length");
                         // send the HMAC to the client
                         checkreturnint(send(selind, (void*)encbuffer_hmac, encbuffer_hmac_len, 0), "error sending HMAC");
+                        free(ciphertext);
+                        free(list_iv);
                         free(encbuffer_hmac);
                         free(enc_buffer);
                         free(iv);
-
+                        free(computed_hmac);
+                        free(recv_hmac);
+                        free(plaintext);
                         continue;
                     } else if (strcmp(cmd, "get") == 0) {
                         printf(YELLOW "Get request received\n" RESET);

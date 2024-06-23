@@ -72,7 +72,6 @@ void get_last_n_messages(MessageList list, int n, char* buffer, size_t buffer_si
         count++;
         current = current->next;
     }
-    printf("count: %d\n", count);
     // Create the output string within the buffer
     buffer[0] = '\0';
     for (int i = 0; i < count; i++) {

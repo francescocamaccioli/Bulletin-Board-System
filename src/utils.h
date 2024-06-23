@@ -60,7 +60,14 @@ void checkrnull(void* ret, char* msg){
       exit(EXIT_FAILURE);
    }
 }
-
+/* 
+void concatenate_hmac_ciphertext(unsigned char* hmac, unsigned char* ciphertext, , unsigned char* buffer) {
+    // Copy the HMAC to the beginning of the buffer
+    memcpy(buffer, hmac, HMAC_SIZE);
+    // Copy the ciphertext right after the HMAC in the buffer
+    memcpy(buffer + HMAC_SIZE, ciphertext, CIPHERTEXT_SIZE);
+}
+ */
 // function to encrypt a message using AES 256 ECB
 void encrypt_message_AES256ECB(unsigned char* message, int message_len, unsigned char* key, unsigned char* ciphertext, int* ciphertext_len){
     EVP_CIPHER_CTX* ctx;
@@ -167,12 +174,12 @@ void compute_sha256(unsigned char *input, size_t input_len, unsigned char *hash)
 }
 
 void compute_sha256_salted(unsigned char *input, size_t input_len, char * hash, char* salt) {
-    // generating 128 bits salt to avoid rainbowtable attacks
-    if (!RAND_bytes((unsigned char*) salt, SALT_LEN)) {
-        perror("RAND_bytes failed");
+    
+    if(!salt){
+        perror("need to allocate salt buffer first");
         exit(EXIT_FAILURE);
     }
- 
+
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (ctx == NULL) {
         perror("EVP_MD_CTX_new failed");
@@ -211,7 +218,7 @@ void compute_sha256_salted(unsigned char *input, size_t input_len, char * hash, 
     EVP_MD_CTX_free(ctx);
 }
 
-int verify_sha256(unsigned char *input, size_t input_len,unsigned char *expected_hash) {
+int verify_sha256(unsigned char *input, size_t input_len, unsigned char *expected_hash) {
     unsigned char computed_hash[SHA256_DIGEST_LENGTH];
     compute_sha256(input, input_len, computed_hash);
     return memcmp(computed_hash, expected_hash, SHA256_DIGEST_LENGTH) == 0;
@@ -317,9 +324,9 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
         puts("IV HMACs are different, aborting");
         return -1;
     }
-    else{
+    /* else{
         puts("IV HMACs are equal, parameters accepted");
-    }
+    } */
     free(iv_hmac);
     free(iv_hmac_comp);
     return 0;

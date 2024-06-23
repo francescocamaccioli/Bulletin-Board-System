@@ -396,6 +396,11 @@ int main(int argc, char* argv[]){
     uint32_t encrypted_len_n = htonl(encrypted_len);
     checkreturnint(send(lissoc, (void*)&encrypted_len_n, sizeof(uint32_t), 0), "error sending encrypted structure length");
     checkreturnint(send(lissoc, (void*)encrypted_auth, encrypted_len, 0), "error sending encrypted structure");
+    free(pksign);
+    free(srv_iv);
+    free(nonce);
+    free(hmac);
+    free(encrypted_auth);
     puts("Handshake successfully completed!");
     
     // Client's command parsing loop
@@ -519,12 +524,12 @@ int main(int argc, char* argv[]){
             }
             checkreturnint(send(lissoc, (void*)"login", CMDLEN, 0), "error sending login");
             compute_sha256((unsigned char*)password, strlen(password), pwd_hash);
-
             char pwd_hash_hex[65];
             for (int i = 0; i < 32; ++i) {
                 sprintf(&pwd_hash_hex[i*2], "%02x", pwd_hash[i]);
             }
             pwd_hash_hex[64] = 0;
+
             // generating timestamp
             char* login_timestamp = create_timestamp();
             int total_len = strlen(username)+strlen(pwd_hash_hex)+strlen(login_timestamp)+4;
@@ -621,7 +626,7 @@ int main(int argc, char* argv[]){
             checkreturnint(recv(lissoc, (void*)response, BUF_SIZE, 0), "error receiving response");
 
             if (strcmp(response, "ok") == 0){
-                puts("List request accepted!");
+                puts(GREEN"List request accepted!"RESET);
                 
                 // receiving IV for AES decryption
                 unsigned char* iv_list = (unsigned char*)malloc(IV_SIZE);
@@ -714,7 +719,7 @@ int main(int argc, char* argv[]){
             checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
 
             if(strcmp(response, "ok") == 0){
-                puts("Get request accepted!");
+                puts(GREEN"Get request accepted!"RESET);
                 // receiving IV for AES decryption
                 unsigned char* iv_get = (unsigned char*)malloc(IV_SIZE);
                 receiveIVHMAC(lissoc, iv_get, shared_secret, shared_secret_len);
@@ -802,7 +807,7 @@ int main(int argc, char* argv[]){
 
             checkreturnint(recv(lissoc, (void*)buffer, BUF_SIZE, 0), "error receiving response");
             if (strcmp(buffer, "ok") == 0){
-                puts("Message added successfully!");
+                puts(GREEN"Message added successfully!"RESET);
             } else if (strcmp(buffer, "notlogged") == 0){
                 puts("You need to login first!");
             } else {
