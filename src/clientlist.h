@@ -12,12 +12,14 @@ typedef struct clientNode{
    int clientfd;
    int hs; // 0: not handshaked, 1: handshaked
    int status; // 0: not logged in, 1: logged in
+   int sessionKeyLen;
+   int sharedSecretLen;
    char username[USERNAME_LEN];
    char email[EMAIL_LEN];
    char hashedpsw[HASH_SIZE];
    char salt[SALT_LEN];
-   unsigned char sessionKey[HASH_SIZE];
-   unsigned char sharedSecret[SHARED_SECRET_LEN];
+   unsigned char sessionKey[HASH_SIZE+16];
+   unsigned char sharedSecret[HASH_SIZE+16];
    struct clientNode* next;
 } ClientNode;
 
@@ -37,7 +39,7 @@ ClientList* create_clientlist() {
     return list;
 }
 
-int addhs(ClientList* list, int fd, unsigned char* sharedsecret, unsigned char* skey){
+int addhs(ClientList* list, int fd, unsigned char* sharedsecret, int shslen, unsigned char* skey, int skeylen){
    if(list == NULL){
       perror("list uninitialized.");
       return -1;
@@ -50,10 +52,12 @@ int addhs(ClientList* list, int fd, unsigned char* sharedsecret, unsigned char* 
    }
    toadd->clientfd = fd;
    toadd->status = 0;
+   toadd->sharedSecretLen = shslen;
+   toadd->sessionKeyLen = skeylen;
    toadd->hs = 1;
    toadd->next = NULL;
-   memcpy(toadd->sharedSecret, sharedsecret, SHARED_SECRET_LEN);
-   memcpy(toadd->sessionKey, skey, AES_KEY_LEN);
+   memcpy(toadd->sharedSecret, sharedsecret, HASH_SIZE+16);
+   memcpy(toadd->sessionKey, skey, AES_KEY_LEN+16);
 
    if(list->head == NULL || list->tail == NULL){
       list->head = list->tail = toadd;
@@ -325,7 +329,7 @@ void printlist(ClientList* list) {
       }
       printf("\n");
       printf("Shared Secret: ");
-      for (int i = 0; i < SHARED_SECRET_LEN; i++) {
+      for (int i = 0; i < HASH_SIZE; i++) {
          printf("%02x", temp->sharedSecret[i]);
       }
       // printing skey key as hex

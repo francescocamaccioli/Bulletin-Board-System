@@ -263,20 +263,41 @@ int main(int argc, char** argv){
                         EVP_PKEY_CTX* ctx_drv = EVP_PKEY_CTX_new(server_keypair, NULL);
                         EVP_PKEY_derive_init(ctx_drv);
                         EVP_PKEY_derive_set_peer(ctx_drv, client_public_key);
-                        unsigned char* shared_secret;
+                        unsigned char* shared_secret_init;
 
                         size_t shared_secret_len;
                         EVP_PKEY_derive(ctx_drv, NULL, &shared_secret_len);
 
-                        shared_secret = (unsigned char*)malloc(shared_secret_len);
-                        EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
+                        shared_secret_init = (unsigned char*)malloc(shared_secret_len);
+                        EVP_PKEY_derive(ctx_drv, shared_secret_init, &shared_secret_len);
 
                         // generate the parameters for AES 256 CBC encryption
                         // computing SHA256 hash of the shared secret
                         unsigned char* AES_256_key;
                         EVP_MD_CTX* keyctx;
                         AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
-                        compute_sha256(shared_secret, shared_secret_len, AES_256_key);
+                        compute_sha256(shared_secret_init, shared_secret_len, AES_256_key);
+
+                        // reverse the shared secret
+                        for (int i = 0; i < shared_secret_len / 2; i++){
+                            unsigned char tmp = shared_secret_init[i];
+                            shared_secret_init[i] = shared_secret_init[shared_secret_len - i - 1];
+                            shared_secret_init[shared_secret_len - i - 1] = tmp;
+                        }
+
+
+                        //compute the hash of the shared secret
+                        unsigned char* shared_secret = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                        compute_sha256(shared_secret_init, shared_secret_len, shared_secret);
+                        shared_secret_len = HASH_SIZE;
+                        printf("Shared secret HASH: ");
+                        for (int i = 0; i < shared_secret_len; i++){
+                            printf("%02x", shared_secret_init[i]);
+                        }
+                        printf("\n");
+                        // delete the initial shared secret
+                        free(shared_secret_init);
+
 
                         // generate a random IV
                         unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
@@ -336,7 +357,17 @@ int main(int argc, char** argv){
                         // compare the HMACs
                         if(CRYPTO_memcmp(computed_hmac_nonce, recv_auth.hmac, computed_hmac_nonce_len) == 0){
                             printf(GREEN "HMACs match, authentication complete\n" RESET);
-                            checkreturnint(addhs(clients, selind, shared_secret, AES_256_key),"error adding client to the list");
+                            // encrypt the shared secret with the AES key
+                            unsigned char* enc_shared_secret = (unsigned char*)malloc(HASH_SIZE+16);
+                            int enc_shared_secret_len;
+                            encrypt_message_AES256ECB(shared_secret, HASH_SIZE, srv_AES_256_key, enc_shared_secret, &enc_shared_secret_len);
+                            // encrypt the session key with the AES key
+                            unsigned char* enc_session_key = (unsigned char*)malloc(HASH_SIZE+16);
+                            int enc_session_key_len;
+                            encrypt_message_AES256ECB(AES_256_key, HASH_SIZE, srv_AES_256_key, enc_session_key, &enc_session_key_len);
+                            checkreturnint(addhs(clients, selind, enc_shared_secret, enc_shared_secret_len, enc_session_key, enc_session_key_len),"error adding client to the list");
+                            free(enc_shared_secret);
+                            free(enc_session_key);
                         }
                         else{
                             printf(RED "HMACs do not match, connection aborted\n" RESET);
@@ -357,11 +388,12 @@ int main(int argc, char** argv){
                             checkreturnint(send(selind, (void*)"nohs", CMDLEN, 0), "error sending nohs");
                             continue;
                         }
-                        unsigned char shared_secret[SHARED_SECRET_LEN];
+                        unsigned char shared_secret[AES_KEY_LEN];
                         unsigned char AES_256_key[AES_KEY_LEN];
-                        memcpy(shared_secret, current->sharedSecret, SHARED_SECRET_LEN);
-                        memcpy(AES_256_key, current->sessionKey, AES_KEY_LEN);
-                        int shared_secret_len = SHARED_SECRET_LEN;
+                        int outlen;
+                        decrypt_message_AES256ECB(current->sessionKey, current->sessionKeyLen, srv_AES_256_key, AES_256_key, &outlen);
+                        decrypt_message_AES256ECB(current->sharedSecret, current->sharedSecretLen, srv_AES_256_key, shared_secret, &outlen);
+                        int shared_secret_len = AES_KEY_LEN;
                         if(isloggedin(clients, getusername(clients, selind)) == 1){
                             printf(RED "User \"%s\" is already logged in.\n" RESET, getusername(clients, selind));
                             checkreturnint(send(selind, (void*)"already", CMDLEN, 0), "error sending already");
@@ -398,8 +430,8 @@ int main(int argc, char** argv){
                         }
                         free(computed_hmac);
                         free(recv_hmac);
-
-                        char* plaintext = malloc(BUF_SIZE);
+                        printf("ciphertext_len: %d\n", ciphertext_len);
+                        char plaintext [BUF_SIZE];
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, reg_iv, (unsigned char*)plaintext, &plaintext_len);
                         char* email = strtok(plaintext, ",");
@@ -407,23 +439,25 @@ int main(int argc, char** argv){
                         char* hashedpsw = strtok(NULL, ",");
                         char* recv_timestamp = strtok(NULL, "\0");
 
+
+
                         if(!email || !username || !hashedpsw || !recv_timestamp){
                             printf(RED "Invalid registration request\n" RESET);
                             checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
                             continue;
                         }
-                        
+                        printlist(clients);
                         if(isin(clients, username) == 1){
                             printf(RED "User \"%s\" already registered.\n" RESET, username);
                             checkreturnint(send(selind, (void*)"exists", CMDLEN, 0), "error sending fail");
                             continue;
                         }
-
+                        
                         if(checktimestamp(recv_timestamp) == 1){
                             checkreturnint(send(selind, (void*)"timeout", CMDLEN, 0), "error sending fail");
                             continue;
                         }
-
+                        
                         puts("sending ok response to client");
                         checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
                         
@@ -449,11 +483,12 @@ int main(int argc, char** argv){
                             checkreturnint(send(selind, (void*)"nohs", CMDLEN, 0), "error sending nohs");
                             continue;
                         }
-                        unsigned char shared_secret[SHARED_SECRET_LEN];
+                        unsigned char shared_secret[AES_KEY_LEN];
                         unsigned char AES_256_key[AES_KEY_LEN];
-                        memcpy(shared_secret, current->sharedSecret, SHARED_SECRET_LEN);
-                        memcpy(AES_256_key, current->sessionKey, AES_KEY_LEN);
-                        int shared_secret_len = SHARED_SECRET_LEN;
+                        int outlen;
+                        decrypt_message_AES256ECB(current->sessionKey, current->sessionKeyLen, srv_AES_256_key, AES_256_key, &outlen);
+                        decrypt_message_AES256ECB(current->sharedSecret, current->sharedSecretLen, srv_AES_256_key, shared_secret, &outlen);
+                        int shared_secret_len = AES_KEY_LEN;
                         unsigned char* login_iv = (unsigned char*)malloc(IV_SIZE);
                         receiveIVHMAC(selind, login_iv, shared_secret, shared_secret_len);
                         // receiving ciphertext
@@ -539,11 +574,12 @@ int main(int argc, char** argv){
                             continue;
                         }
                         ClientNode* current = findclient(clients, selind);
-                        unsigned char shared_secret[SHARED_SECRET_LEN];
+                        unsigned char shared_secret[AES_KEY_LEN];
                         unsigned char AES_256_key[AES_KEY_LEN];
-                        memcpy(shared_secret, current->sharedSecret, SHARED_SECRET_LEN);
-                        memcpy(AES_256_key, current->sessionKey, AES_KEY_LEN);
-                        int shared_secret_len = SHARED_SECRET_LEN;
+                        int outlen;
+                        decrypt_message_AES256ECB(current->sessionKey, current->sessionKeyLen, srv_AES_256_key, AES_256_key, &outlen);
+                        decrypt_message_AES256ECB(current->sharedSecret, current->sharedSecretLen, srv_AES_256_key, shared_secret, &outlen);
+                        int shared_secret_len = AES_KEY_LEN;
 
                         // receive IV
                         unsigned char* list_iv = (unsigned char*)malloc(IV_SIZE);
@@ -626,11 +662,12 @@ int main(int argc, char** argv){
                         }
                         
                         ClientNode* current = findclient(clients, selind);
-                        unsigned char shared_secret[SHARED_SECRET_LEN];
+                        unsigned char shared_secret[AES_KEY_LEN];
                         unsigned char AES_256_key[AES_KEY_LEN];
-                        memcpy(shared_secret, current->sharedSecret, SHARED_SECRET_LEN);
-                        memcpy(AES_256_key, current->sessionKey, AES_KEY_LEN);
-                        int shared_secret_len = SHARED_SECRET_LEN;
+                        int outlen;
+                        decrypt_message_AES256ECB(current->sessionKey, current->sessionKeyLen, srv_AES_256_key, AES_256_key, &outlen);
+                        decrypt_message_AES256ECB(current->sharedSecret, current->sharedSecretLen, srv_AES_256_key, shared_secret, &outlen);
+                        int shared_secret_len = AES_KEY_LEN;
 
                         // receive IV
                         unsigned char* get_iv = (unsigned char*)malloc(IV_SIZE);
@@ -715,13 +752,15 @@ int main(int argc, char** argv){
                             checkreturnint(send(selind, (void*)"nohs", CMDLEN, 0), "error sending nohs");
                             continue;
                         }
-                        unsigned char shared_secret[SHARED_SECRET_LEN];
+                        unsigned char shared_secret[AES_KEY_LEN];
                         unsigned char AES_256_key[AES_KEY_LEN];
-                        memcpy(shared_secret, current->sharedSecret, SHARED_SECRET_LEN);
-                        memcpy(AES_256_key, current->sessionKey, AES_KEY_LEN);
-                        int shared_secret_len = SHARED_SECRET_LEN;
+                        int outlen;
+                        decrypt_message_AES256ECB(current->sessionKey, current->sessionKeyLen, srv_AES_256_key, AES_256_key, &outlen);
+                        decrypt_message_AES256ECB(current->sharedSecret, current->sharedSecretLen, srv_AES_256_key, shared_secret, &outlen);
+                        int shared_secret_len = AES_KEY_LEN;
+
                         
-                        unsigned char* add_iv = (unsigned char*)malloc(IV_SIZE);
+                        unsigned char add_iv [IV_SIZE];
                         receiveIVHMAC(selind, add_iv, shared_secret, shared_secret_len);
 
                         // receiving ciphertext
@@ -927,12 +966,26 @@ int main(int argc, char** argv){
                         EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
 
                         current->hs = 1;
-                        memcpy(current->sharedSecret, shared_secret, SHARED_SECRET_LEN);
                         unsigned char* AES_256_key;
                         EVP_MD_CTX* keyctx;
                         AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
                         compute_sha256(shared_secret, shared_secret_len, AES_256_key);
-                        memcpy(current->sessionKey, AES_256_key, AES_KEY_LEN);
+                        // reverse the shared secret
+                        for (int i = 0; i < shared_secret_len / 2; i++){
+                            unsigned char tmp = shared_secret[i];
+                            shared_secret[i] = shared_secret[shared_secret_len - i - 1];
+                            shared_secret[shared_secret_len - i - 1] = tmp;
+                        }
+
+                        unsigned char* shared_secret_hash = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                        compute_sha256(shared_secret, shared_secret_len, shared_secret_hash);
+                        shared_secret_len = HASH_SIZE;
+
+                        encrypt_message_AES256ECB(shared_secret_hash, shared_secret_len, srv_AES_256_key, current->sharedSecret, &current->sharedSecretLen);
+                        encrypt_message_AES256ECB(AES_256_key, AES_KEY_LEN, srv_AES_256_key, current->sessionKey, &current->sessionKeyLen);
+
+
+                        free(shared_secret_hash);
                         free(AES_256_key);
                         current->status = 0;
                     } else {

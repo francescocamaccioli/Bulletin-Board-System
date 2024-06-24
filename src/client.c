@@ -207,6 +207,7 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
 
+
     // verify the signature
     EVP_MD_CTX* ctx_verify;
     ctx_verify = EVP_MD_CTX_new();
@@ -240,13 +241,13 @@ int main(int argc, char* argv[]){
     EVP_PKEY_CTX* ctx_drv = EVP_PKEY_CTX_new(client_keypair, NULL);
     EVP_PKEY_derive_init(ctx_drv);
     EVP_PKEY_derive_set_peer(ctx_drv, server_pub_key);
-    unsigned char* shared_secret;
+    unsigned char* shared_secret_init;
 
     size_t shared_secret_len;
     EVP_PKEY_derive(ctx_drv, NULL, &shared_secret_len);
 
-    shared_secret = (unsigned char*)malloc(shared_secret_len);
-    EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
+    shared_secret_init = (unsigned char*)malloc(shared_secret_len);
+    EVP_PKEY_derive(ctx_drv, shared_secret_init, &shared_secret_len);
 
     // hashing the shared secret to obtain the AES 256 key
     unsigned char* AES_256_key;
@@ -255,9 +256,29 @@ int main(int argc, char* argv[]){
     AES_256_key = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
     keyctx = EVP_MD_CTX_new();
     EVP_DigestInit(keyctx, EVP_sha256());
-    EVP_DigestUpdate(keyctx,(unsigned char*)shared_secret, shared_secret_len);
+    EVP_DigestUpdate(keyctx,(unsigned char*)shared_secret_init, shared_secret_len);
     EVP_DigestFinal(keyctx, AES_256_key, (unsigned int*)&AES_256_key_len);
     EVP_MD_CTX_free(keyctx);
+
+    // reversing the shared secret init
+    for (int i = 0; i < shared_secret_len/2; i++){
+        unsigned char temp = shared_secret_init[i];
+        shared_secret_init[i] = shared_secret_init[shared_secret_len - i - 1];
+        shared_secret_init[shared_secret_len - i - 1] = temp;
+    }
+
+    
+    // computing the hash of the shared secret
+    unsigned char shared_secret [HASH_SIZE];
+    compute_sha256(shared_secret_init, shared_secret_len, shared_secret);
+    shared_secret_len = HASH_SIZE;
+    printf("Shared secret HASH: ");
+    for (int i = 0; i < shared_secret_len; i++){
+        printf("%02x", shared_secret_init[i]);
+    }
+    printf("\n");
+    free(shared_secret_init);
+
 
     unsigned char* srv_iv = malloc(IV_SIZE);
     if(receiveIVHMAC(lissoc, srv_iv, shared_secret, shared_secret_len) < 0){
@@ -405,7 +426,7 @@ int main(int argc, char* argv[]){
 
                 // Validate password
                 comp = regexec(&regex, password, 0, NULL, 0);
-                if (comp) {
+                if (!comp) {
                     fprintf(stderr, "Invalid password format\n");
                     continue;
                 }
