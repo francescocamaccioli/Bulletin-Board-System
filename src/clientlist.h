@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdio.h>
+#include <sys/ioctl.h>
 
 #define AES_KEY_LEN EVP_MD_size(EVP_sha256())
 #define SHARED_SECRET_LEN 256
@@ -14,7 +16,7 @@ typedef struct clientNode{
    char email[EMAIL_LEN];
    char hashedpsw[HASH_SIZE];
    char salt[SALT_LEN];
-   unsigned char sessionKey[256];
+   unsigned char sessionKey[HASH_SIZE];
    unsigned char sharedSecret[SHARED_SECRET_LEN];
    struct clientNode* next;
 } ClientNode;
@@ -292,17 +294,27 @@ void free_clientlist(ClientList* list) {
     free(list);
 }
 
+void print_separator() {
+   struct winsize w;
+   ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+   int terminal_width = w.ws_col;
+   int separator_length = terminal_width - 1;
+   char separator[separator_length + 1];
+   memset(separator, '-', separator_length);
+   separator[separator_length] = '\0';
+   puts(separator);
+}
 
 void printlist(ClientList* list) {
    ClientNode* temp = list->head;
-   puts("---------------------------------------------------------------");
    while (temp != NULL) {
+      print_separator();
       printf("Client FD: %d\n", temp->clientfd);
       printf("Status: %d\n", temp->status);
       printf("Username: %s\n", temp->username);
       printf("Email: %s\n", temp->email);
       // printing hashed password as hex
-      printf("Hashed Password: ");
+      printf("Salted Hashed Password: ");
       for (int i = 0; i < HASH_SIZE; i++) {
          printf("%02x", temp->hashedpsw[i]);
       }
@@ -323,6 +335,6 @@ void printlist(ClientList* list) {
       }
       printf("\n");
       temp = temp->next;
-      puts("---------------------------------------------------------------");
+      print_separator();
    }
 }
