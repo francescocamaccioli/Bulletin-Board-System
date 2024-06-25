@@ -128,7 +128,7 @@ int addclient(ClientList* list, int fd, int s, char* username, char* email, char
    strncpy(toadd->username, username, sizeof(toadd->username) - 1);
    strncpy(toadd->hashedpsw, hashedpassword, sizeof(toadd->hashedpsw) - 1);
    strncpy(toadd->salt, salt, sizeof(toadd->salt) - 1);
-   strncpy(toadd->sessionKey, key, sizeof(toadd->sessionKey) - 1);
+   strncpy((unsigned char*)toadd->sessionKey, key, sizeof(toadd->sessionKey) - 1);
    toadd->next = NULL;
 
    if(list->head == NULL || list->tail == NULL){

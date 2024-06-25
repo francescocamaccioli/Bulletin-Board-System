@@ -12,7 +12,7 @@ typedef struct message{
    char body[BODY_LEN];
    struct message* next;
 } Message;
-typedef struct Message* MessageList;
+typedef Message* MessageList;
 
 
 Message* create_message(int mid, int ctlen, char* author, char* title, char* body) {
@@ -47,7 +47,7 @@ void getmessage(MessageList list, int mid, char* buffer, size_t buffer_size, uns
             // decrypt the body with AES256 ECB
             char decrypted_body[BODY_LEN];
             int decrypted_len;
-            decrypt_message_AES256ECB(current->body, (current->ct_len)+1, key, decrypted_body, &decrypted_len);
+            decrypt_message_AES256ECB((unsigned char*)current->body, (current->ct_len)+1, key, (unsigned char*)decrypted_body, &decrypted_len);
             snprintf(buffer, buffer_size, "Message id: %d\nTitle: %s\nAuthor: %s\nBody: %s\n\n", current->mid, current->title, current->author, decrypted_body);
             return;
         }
@@ -79,7 +79,7 @@ void get_last_n_messages(MessageList list, int n, char* buffer, size_t buffer_si
         // decrypt the body with AES256 ECB
         char decrypted_body[BODY_LEN];
         int decrypted_len;
-        decrypt_message_AES256ECB(messages[i]->body, (messages[i]->ct_len)+1, key, decrypted_body, &decrypted_len);
+        decrypt_message_AES256ECB((unsigned char*)messages[i]->body, (messages[i]->ct_len)+1, key, (unsigned char*)decrypted_body, &decrypted_len);
         snprintf(temp, sizeof(temp), "Message id: %d\nTitle: %s\nAuthor: %s\nBody: %s\n\n", messages[i]->mid, messages[i]->title, messages[i]->author, decrypted_body);
         if (strlen(buffer) + strlen(temp) + 1 > buffer_size) {
             // Prevent buffer overflow

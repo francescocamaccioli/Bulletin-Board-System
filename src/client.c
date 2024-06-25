@@ -2,7 +2,8 @@
 #include <regex.h>
 
 int lissoc = 0;
-int regexcheckon = 1; // 1 if to turn regex check on, 0 if off
+int login = 0;
+int regexcheckon = 0; // 1 if to turn regex check on, 0 if off
 
 void help(){
     puts("  ┌───────────────────────────────────────────────────────┐");
@@ -50,7 +51,6 @@ int main(int argc, char* argv[]){
     }
 
     puts("Starting Handshake...");
-    sleep(0.5);
     checkreturnint(send(lissoc, (void*)"hello", CMDLEN, 0), "error sending hello");
 
     puts("Receiving certificate from server");
@@ -269,7 +269,7 @@ int main(int argc, char* argv[]){
 
     
     // computing the hash of the shared secret
-    unsigned char shared_secret [HASH_SIZE];
+    unsigned char shared_secret[HASH_SIZE];
     compute_sha256(shared_secret_init, shared_secret_len, shared_secret);
     shared_secret_len = HASH_SIZE;
     printf("Shared secret HASH: ");
@@ -351,14 +351,14 @@ int main(int argc, char* argv[]){
 
     while (1) {
         
-        printf(" Enter command: \n> ");
+        printf("Enter command: \n> "CYAN);
         if (fgets(input, BUF_SIZE, stdin) == NULL) {
             perror("Error reading input");
             continue;
         }
         // Remove newline character
         input[strcspn(input, "\n")] = 0;
-
+        printf(RESET);
         char* command = strtok(input, " ");
         char* arg = strtok(NULL, " ");
 
@@ -368,6 +368,10 @@ int main(int argc, char* argv[]){
         }
 
         if (strcmp(input, "register") == 0) {
+            if(login){
+                puts(RED"You are already logged in, please logout first."RESET);
+                continue;
+            }
             char* email = arg;
             char* username = strtok(NULL, " ");
             char* password = strtok(NULL, " ");
@@ -481,12 +485,41 @@ int main(int argc, char* argv[]){
             checkreturnint(send(lissoc, (void*)&sendlen_n, sizeof(uint32_t), 0), "error sending sendlen");
             checkreturnint(send(lissoc, sendbuf, sendlen, 0), "error sending sendbuf");
             printf("Sent register request\n");
-          
+
             // receiving response from server
             char* response = (char*)malloc(CMDLEN);
             puts("receiving response");
             checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
             if (strcmp(response, "ok") == 0){
+                // receving challenge from server
+                unsigned char* challenge[32];
+                // reading challenge from file
+                FILE* challenge_file = fopen("challenge.txt", "r");
+                if (!challenge_file){
+                    perror("error opening challenge file");
+                    exit(-1);
+                }
+                fread(challenge, 1, 32, challenge_file);
+                fclose(challenge_file);
+                remove("challenge.txt");
+
+                // computing HMAC over challenge
+                unsigned char* hmac_chal = (unsigned char*)malloc(HMAC_SIZE);
+                unsigned int hmac_chal_len;
+                compute_hmac(challenge, 32, shared_secret, shared_secret_len, hmac_chal, &hmac_chal_len);
+
+                // writing the hmac to its file
+                FILE* hmac_file = fopen("chall_hmac.txt", "w");
+                if (!hmac_file){
+                    perror("error opening hmac file");
+                    exit(-1);
+                }
+                fwrite(hmac_chal, 1, HMAC_SIZE, hmac_file);
+                fclose(hmac_file);
+
+                // send challenge ready to server
+                checkreturnint(send(lissoc, (void*)"ready", CMDLEN, 0), "error sending ready");
+
                 puts(GREEN "Registration successful!" RESET);
             } else if(strcmp(response, "exists") == 0){
                 puts(RED "Username already used, try again." RESET);
@@ -496,7 +529,11 @@ int main(int argc, char* argv[]){
                 puts(RED "Registration failed, try again." RESET);
             }
 
-        } else if (strcmp(input, "login") == 0) {            
+        } else if (strcmp(input, "login") == 0) {     
+            if(login){
+                puts(RED"You are already logged in, please logout first."RESET);
+                continue;
+            }
             char* username = arg;
             char* password = strtok(NULL, " ");
             char* rest = strtok(NULL, "\0");
@@ -520,6 +557,8 @@ int main(int argc, char* argv[]){
                 sprintf(&pwd_hash_hex[i*2], "%02x", pwd_hash[i]);
             }
             pwd_hash_hex[64] = 0;
+
+            
 
             // generating timestamp
             char* login_timestamp = create_timestamp();
@@ -548,11 +587,12 @@ int main(int argc, char* argv[]){
             concatenate_hmac_ciphertext(hmac_log, ciphertext, ciphertext_len, sendbuf);
             checkreturnint(send(lissoc, (void*)&sendlen_n, sizeof(uint32_t), 0), "error sending sendlen");
             checkreturnint(send(lissoc, sendbuf, sendlen, 0), "error sending sendbuf");
-            printf("Sent register request\n");
+            printf("Sent login request\n");
             // receiving response from server
             char* response = (char*)malloc(CMDLEN);
             checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
             if (strcmp(response, "ok") == 0){
+                login = 1;
                 puts(GREEN"Login successful!"RESET);
             } else if(strcmp(response, "nouser") == 0){
                 puts(RED"User not found, please register first."RESET);
@@ -797,8 +837,14 @@ int main(int argc, char* argv[]){
                 puts("Message add failed, try again.");
             }
         } else if (strcmp(input, "logout") == 0) {
+            if(!login){
+                puts(RED"You need to login first!"RESET);
+                continue;
+            }
             printf("Logging out...\n");
+            login = 0;
             checkreturnint(send(lissoc, (void*)"logout", CMDLEN, 0), "error sending logout req");
+            puts("Executing Handshake for next session...");
             EVP_PKEY* dh_params;
             dh_params = EVP_PKEY_new();
             EVP_PKEY_set1_DH(dh_params, DH_get_2048_224());

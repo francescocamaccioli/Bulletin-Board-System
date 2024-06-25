@@ -310,7 +310,7 @@ int receiveIVHMAC(int lissoc, unsigned char* iv, unsigned char* shared_secret, s
         perror("malloc failed");
         return -1;
     }
-    int iv_hmac_len_comp;
+    unsigned int iv_hmac_len_comp;
     compute_hmac(iv, 16, shared_secret, shared_secret_len, iv_hmac_comp, &iv_hmac_len_comp);
     // check if the HMACs are equal
     if (memcmp(iv_hmac, iv_hmac_comp, HMAC_SIZE) != 0){
