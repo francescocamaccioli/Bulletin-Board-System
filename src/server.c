@@ -13,7 +13,7 @@ int main(int argc, char** argv){
     }
 
     ClientList* clients = create_clientlist();
-    MessageList* messages = NULL;
+    MessageList messages = NULL;
 
     FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
     checkrnull(server_cert_file, "Failed to open server certificate file");
@@ -213,7 +213,6 @@ int main(int argc, char** argv){
                         bytes_received = recv(selind, (void*)pub_key_buf, pub_key_len, 0);
                         if (bytes_received < 0) {
                             perror("Error receiving public key");
-                            free(pub_key_buf);
                             return 1;
                         }
 
@@ -221,10 +220,8 @@ int main(int argc, char** argv){
                         EVP_PKEY* client_public_key = d2i_PUBKEY(NULL, (const unsigned char**)&pub_key_buf, pub_key_len);
                         if (!client_public_key) {
                             perror("Error deserializing public key");
-                            free(pub_key_buf);
                             return 1;
                         }
-
                         //serialize the public key
                         unsigned char* srv_pkey_buf = NULL;
                         int srv_pub_key_len = i2d_PUBKEY(server_keypair, &srv_pkey_buf);
@@ -275,7 +272,7 @@ int main(int argc, char** argv){
                         }
 
                         //compute the hash of the shared secret
-                        unsigned char* shared_secret = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                        unsigned char shared_secret[HASH_SIZE];
                         compute_sha256(shared_secret_init, shared_secret_len, shared_secret);
                         shared_secret_len = HASH_SIZE;
                         printf("Shared secret HASH: ");
@@ -283,8 +280,6 @@ int main(int argc, char** argv){
                             printf("%02x", shared_secret_init[i]);
                         }
                         printf("\n");
-                        // delete the initial shared secret
-                        //free(shared_secret_init);
 
                         // generate a random IV
                         unsigned char iv[IV_SIZE];
@@ -337,7 +332,7 @@ int main(int argc, char** argv){
                         checktimestamp(recv_auth.timestamp);
 
                         // compute the HMAC of the nonce by using the function
-                        unsigned char* computed_hmac_nonce = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
+                        unsigned char computed_hmac_nonce[HMAC_SIZE];
                         unsigned int computed_hmac_nonce_len;
                         compute_hmac(nonce, nonce_len, shared_secret, shared_secret_len, computed_hmac_nonce, &computed_hmac_nonce_len);
 
@@ -363,7 +358,6 @@ int main(int argc, char** argv){
                         free(signature);
                         free(enc_struct);
                         free(dec_struct);
-                        free(computed_hmac_nonce);
                     }
                     else if (strcmp(cmd,"register")==0){
                         printf("Register request received, in else if\n");
@@ -400,9 +394,8 @@ int main(int argc, char** argv){
                         free(conc_buf);
 
                         // compute HMAC of the ciphertext
-                        unsigned char* computed_hmac;
+                        unsigned char computed_hmac[HMAC_SIZE];
                         unsigned int computed_hmac_len;
-                        computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                         compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
 
                         if(CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len) != 0){
@@ -413,7 +406,6 @@ int main(int argc, char** argv){
                         else{
                             printf("HMACs match, registration validated.\n");
                         }
-                        free(computed_hmac);
                         printf("ciphertext_len: %d\n", ciphertext_len);
                         char plaintext [BUF_SIZE];
                         int plaintext_len;
@@ -471,7 +463,7 @@ int main(int argc, char** argv){
                         }
 
                         // read challenge hmac from file
-                        unsigned char* challenge_hmac[HMAC_SIZE];
+                        unsigned char challenge_hmac[HMAC_SIZE];
                         FILE* challenge_hmac_file = fopen("chall_hmac.txt", "r");
                         if(!challenge_hmac_file){
                             perror("Failed to open challenge hmac file");
@@ -482,7 +474,7 @@ int main(int argc, char** argv){
                         remove("chall_hmac.txt");
 
                         // compute hmac over challenge to check if it matches the one received from the client
-                        unsigned char* computed_hmac_challenge[HMAC_SIZE];
+                        unsigned char computed_hmac_challenge[HMAC_SIZE];
                         unsigned int computed_hmac_challenge_len;
                         compute_hmac(challenge, 32, shared_secret, shared_secret_len, computed_hmac_challenge, &computed_hmac_challenge_len);
 
@@ -505,8 +497,8 @@ int main(int argc, char** argv){
                             exit(EXIT_FAILURE);
                         }
                         unsigned char* salted_hashedpwd = malloc(HASH_SIZE);
-                        compute_sha256_salted((unsigned char*)hashedpsw, strlen(hashedpsw),salted_hashedpwd, salt);
-                        checkreturnint(addinfo(clients, selind, username, email, salted_hashedpwd, salt), "addinfo error");
+                        compute_sha256_salted((unsigned char*)hashedpsw, strlen(hashedpsw),(char*)salted_hashedpwd, salt);
+                        checkreturnint(addinfo(clients, selind, username, email, (char*)salted_hashedpwd, salt), "addinfo error");
                         printlist(clients);
                         free(ciphertext);
                         free(salted_hashedpwd);
@@ -534,17 +526,16 @@ int main(int argc, char** argv){
                         long buflen = ntohl(buflen_n);
                         int ciphertext_len = buflen - HMAC_SIZE;
                         unsigned char* conc_buf = (unsigned char*)malloc(buflen);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
+                        unsigned char recv_hmac[HMAC_SIZE];
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
                         checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
                         split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
                         free(conc_buf);
 
                         // compute HMAC of the ciphertext
-                        unsigned char* computed_hmac;
+                        unsigned char* computed_hmac[HMAC_SIZE];
                         unsigned int computed_hmac_len;
-                        computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
-                        compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
+                        compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, (unsigned char*)computed_hmac, &computed_hmac_len);
                         
                         if(CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len) != 0){
                             checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
@@ -554,8 +545,6 @@ int main(int argc, char** argv){
                         else{
                             printf("HMACs match, login validated\n");
                         }
-                        free(computed_hmac);
-                        free(recv_hmac);
 
                         char* plaintext = malloc(BUF_SIZE);
                         int plaintext_len;
@@ -588,7 +577,7 @@ int main(int argc, char** argv){
                             continue;
                         }
 
-                        if(checkpwd(current, hashedpsw) == 1){
+                        if(checkpwd(current, (unsigned char*)hashedpsw) == 1){
                             printf(RED "Password for user \"%s\" is incorrect.\n" RESET, username);
                             checkreturnint(send(selind, (void*)"wrongpsw", CMDLEN, 0), "error sending fail");
                             continue;
@@ -632,16 +621,15 @@ int main(int argc, char** argv){
                         long buflen = ntohl(buflen_n);
                         int ciphertext_len = buflen - HMAC_SIZE;
                         unsigned char* conc_buf = (unsigned char*)malloc(buflen);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
+                        unsigned char recv_hmac[HMAC_SIZE];
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
                         checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
                         split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
                         free(conc_buf);
 
                         // compute HMAC of the ciphertext
-                        unsigned char* computed_hmac;
+                        unsigned char computed_hmac[HMAC_SIZE];
                         unsigned int computed_hmac_len;
-                        computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                         compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
 
                         if(CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len) != 0){
@@ -674,8 +662,8 @@ int main(int argc, char** argv){
                         unsigned char* enc_buffer = (unsigned char*)malloc(BUF_SIZE*n+16);
                         int enc_buffer_len;
                         // encrypting buffer with AES CBC to send it to client
-                        encrypt_message(buffer, strlen(buffer)+1, AES_256_key, list_iv, enc_buffer, &enc_buffer_len);
-                        unsigned char* encbuffer_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+                        encrypt_message((unsigned char*)buffer, strlen(buffer)+1, AES_256_key, list_iv, enc_buffer, &enc_buffer_len);
+                        unsigned char encbuffer_hmac[HMAC_SIZE];
                         unsigned int encbuffer_hmac_len;
                         compute_hmac(enc_buffer, enc_buffer_len, shared_secret, shared_secret_len, encbuffer_hmac, &encbuffer_hmac_len);
                         long sendlen = HMAC_SIZE + enc_buffer_len;
@@ -688,10 +676,7 @@ int main(int argc, char** argv){
                         
                         free(ciphertext);
                         free(list_iv);
-                        free(encbuffer_hmac);
                         free(enc_buffer);
-                        free(computed_hmac);
-                        free(recv_hmac);
                         free(plaintext);
                         continue;
                     } else if (strcmp(cmd, "get") == 0) {
@@ -711,7 +696,7 @@ int main(int argc, char** argv){
 
                         // receive IV
                         unsigned char* get_iv[IV_SIZE];
-                        receiveIVHMAC(selind, get_iv, shared_secret, shared_secret_len);
+                        receiveIVHMAC(selind, (unsigned char*)get_iv, shared_secret, shared_secret_len);
 
                         // receive ciphertext length & ciphertext
                         uint32_t buflen_n;
@@ -719,16 +704,15 @@ int main(int argc, char** argv){
                         long buflen = ntohl(buflen_n);
                         int ciphertext_len = buflen - HMAC_SIZE;
                         unsigned char* conc_buf = (unsigned char*)malloc(buflen);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
+                        unsigned char recv_hmac[HMAC_SIZE];
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
                         checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
                         split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
                         free(conc_buf);
 
                         // compute HMAC of the ciphertext
-                        unsigned char* computed_hmac;
+                        unsigned char computed_hmac[HMAC_SIZE];
                         unsigned int computed_hmac_len;
-                        computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                         compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
 
                         if(CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len) != 0){
@@ -740,13 +724,10 @@ int main(int argc, char** argv){
                             printf("HMACs match, get validated\n");
                         }
 
-                        free(computed_hmac);
-                        free(recv_hmac);
-
                         // decrypt the ciphertext
                         char* plaintext = malloc(12);
                         int plaintext_len;
-                        decrypt_message(ciphertext, ciphertext_len, AES_256_key, get_iv, (unsigned char*)plaintext, &plaintext_len);
+                        decrypt_message(ciphertext, ciphertext_len, AES_256_key, (unsigned char*)get_iv, (unsigned char*)plaintext, &plaintext_len);
                         free(ciphertext);
 
                         int mid = atoi(plaintext);
@@ -760,7 +741,7 @@ int main(int argc, char** argv){
                         checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
 
                         unsigned char* iv[IV_SIZE];
-                        iv_comm(selind, iv, shared_secret, shared_secret_len);
+                        iv_comm(selind, (unsigned char*)iv, shared_secret, shared_secret_len);
 
                         char buffer[BUF_SIZE];
                         getmessage(messages, mid, buffer, BUF_SIZE, srv_AES_256_key);
@@ -768,8 +749,8 @@ int main(int argc, char** argv){
                         unsigned char* enc_buffer = (unsigned char*)malloc(BUF_SIZE+16);
                         int enc_buffer_len;
                         // encrypting buffer with AES CBC to send it to client
-                        encrypt_message(buffer, strlen(buffer)+1, AES_256_key, iv, enc_buffer, &enc_buffer_len);
-                        unsigned char* encbuffer_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
+                        encrypt_message((unsigned char*)buffer, strlen(buffer)+1, AES_256_key, (unsigned char*)iv, enc_buffer, &enc_buffer_len);
+                        unsigned char encbuffer_hmac[HMAC_SIZE];
                         unsigned int encbuffer_hmac_len;
                         compute_hmac(enc_buffer, enc_buffer_len, shared_secret, shared_secret_len, encbuffer_hmac, &encbuffer_hmac_len);
                         long sendlen = HMAC_SIZE + enc_buffer_len;
@@ -779,7 +760,6 @@ int main(int argc, char** argv){
 
                         checkreturnint(send(selind, (void*)&sendlen_n, sizeof(uint32_t), 0), "error sending sendlen");
                         checkreturnint(send(selind, sendbuf, sendlen, 0), "error sending sendbuf");
-                        free(encbuffer_hmac);
                         free(enc_buffer);
                         continue;
                     } else if (strcmp(cmd, "add") == 0) {
@@ -807,18 +787,16 @@ int main(int argc, char** argv){
                         long buflen = ntohl(buflen_n);
                         int ciphertext_len = buflen - HMAC_SIZE;
                         unsigned char* conc_buf = (unsigned char*)malloc(buflen);
-                        unsigned char* recv_hmac = (unsigned char*)malloc(HMAC_SIZE);
+                        unsigned char recv_hmac[HMAC_SIZE];
                         unsigned char* ciphertext = (unsigned char*)malloc(ciphertext_len);
                         checkreturnint(recv(selind, (void*) conc_buf, buflen, 0), "error receiving concatenated buffer");
                         split_hmac_ciphertext(conc_buf, recv_hmac, ciphertext, ciphertext_len);
                         free(conc_buf);
                         
                         // compute HMAC of the ciphertext
-                        unsigned char* computed_hmac;
+                        unsigned char computed_hmac[HMAC_SIZE];
                         unsigned int computed_hmac_len;
-                        computed_hmac = (unsigned char*)malloc(EVP_MAX_MD_SIZE);
                         compute_hmac(ciphertext, ciphertext_len, shared_secret, shared_secret_len, computed_hmac, &computed_hmac_len);
-                        
 
                         if(CRYPTO_memcmp(computed_hmac, recv_hmac, computed_hmac_len) != 0){
                             checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
@@ -828,8 +806,6 @@ int main(int argc, char** argv){
                         else{
                             printf("HMACs match, add validated\n");
                         }
-                        free(computed_hmac);
-                        free(recv_hmac);
 
                         if(isloggedin(clients, getusername(clients, selind)) == 0){
                             puts("sending notlogged response to client");
@@ -848,11 +824,11 @@ int main(int argc, char** argv){
                         char* title = strtok(plaintext, ",");
                         char* body = strtok(NULL, "\0");
 
-                        unsigned char enc_body [BODY_LEN];
+                        char enc_body[BODY_LEN];
                         int enc_body_len;
-                        encrypt_message_AES256ECB((unsigned char*)body, strlen(body)+1, srv_AES_256_key, enc_body, &enc_body_len);
+                        encrypt_message_AES256ECB((unsigned char*)body, strlen(body)+1, srv_AES_256_key, (unsigned char*)enc_body, &enc_body_len);
 
-                        Message* message = create_message(messagecount, enc_body_len, current->username, title, enc_body);
+                        Message* message = create_message(messagecount, current->username, title, enc_body, enc_body_len);
                         
                         insert_message(&messages, message);
                         messagecount++;
@@ -984,7 +960,6 @@ int main(int argc, char** argv){
                         checkreturnint(send(selind, (void*)&signature_len_n, sizeof(uint32_t), 0), "Error sending signature length");
                         // send the signature to the client
                         checkreturnint(send(selind, (void*)signature, signature_len, 0), "Error sending signature");
-                        free(signature);
 
                         // Generate the shared secret
                         EVP_PKEY_CTX* ctx_drv = EVP_PKEY_CTX_new(server_keypair, NULL);
@@ -1018,6 +993,7 @@ int main(int argc, char** argv){
                         printlist(clients);
                         free(shared_secret_hash);
                         free(AES_256_key);
+                        free(signature);
                         current->status = 0;
                     } else {
                         printf(RED "Client #%d quitted.\n" RESET, selind);

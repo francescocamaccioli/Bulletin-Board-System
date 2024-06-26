@@ -128,7 +128,7 @@ int addclient(ClientList* list, int fd, int s, char* username, char* email, char
    strncpy(toadd->username, username, sizeof(toadd->username) - 1);
    strncpy(toadd->hashedpsw, hashedpassword, sizeof(toadd->hashedpsw) - 1);
    strncpy(toadd->salt, salt, sizeof(toadd->salt) - 1);
-   strncpy((unsigned char*)toadd->sessionKey, key, sizeof(toadd->sessionKey) - 1);
+   strncpy((char*)toadd->sessionKey, (const char*)key, sizeof(toadd->sessionKey) - 1);
    toadd->next = NULL;
 
    if(list->head == NULL || list->tail == NULL){
@@ -211,7 +211,7 @@ int checkpwd(ClientNode* client, unsigned char* hashed_pwd){
 
    // retrieve user's salt and hash the hashed password with it
    unsigned char* salted_pwd = malloc(HASH_SIZE);
-   compute_sha256_salted(hashed_pwd, strlen(hashed_pwd), salted_pwd, temp->salt);
+   compute_sha256_salted(hashed_pwd, strlen((const char*)hashed_pwd), (char*)salted_pwd, temp->salt);
 
    // compare the hashed password with the stored one
    if (memcmp(salted_pwd, temp->hashedpsw, HASH_SIZE) == 0){

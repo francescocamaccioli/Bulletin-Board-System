@@ -14,15 +14,14 @@ typedef struct message{
 } Message;
 typedef Message* MessageList;
 
-
-Message* create_message(int mid, int ctlen, char* author, char* title, char* body) {
+Message* create_message(int mid, char* author, char* title, char* body, int bodylen) {
     Message* message = (Message*)malloc(sizeof(Message));
     if (!message) {
         perror("Failed to allocate memory for message");
         exit(EXIT_FAILURE);
     }
     message->mid = mid;
-    message->ct_len = ctlen;
+    message->ct_len = bodylen;
     strcpy(message->author, author);
     strcpy(message->title, title);
     strcpy(message->body, body);
@@ -90,7 +89,7 @@ void get_last_n_messages(MessageList list, int n, char* buffer, size_t buffer_si
     }
 }
 
-void free_messagelist(MessageList* list) {
+void free_messagelist(MessageList list) {
     if (!list) {
         return;
     }
@@ -104,7 +103,7 @@ void free_messagelist(MessageList* list) {
 }
 
 //function to print the message list
-void print_messagelist(MessageList* list) {
+void print_messagelist(MessageList list) {
     if (!list) {
         return;
     }

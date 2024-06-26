@@ -558,8 +558,6 @@ int main(int argc, char* argv[]){
             }
             pwd_hash_hex[64] = 0;
 
-            
-
             // generating timestamp
             char* login_timestamp = create_timestamp();
             int total_len = strlen(username)+strlen(pwd_hash_hex)+strlen(login_timestamp)+4;
