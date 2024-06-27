@@ -49,12 +49,14 @@ int main(int argc, char** argv){
     compute_sha256(rsa_priv_key_buf, rsa_priv_key_len, srv_AES_256_key);
     free(rsa_priv_key_buf);
 
-    RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
+    /*
+     RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
     if (rsa) {
         RSA_free(rsa);
     } else {
         printf("Public key is not an RSA key.\n");
     }
+    */
 
     // Serializing the certificate to send it to the client
     unsigned char *cert_buf = NULL;
@@ -222,6 +224,7 @@ int main(int argc, char** argv){
                             perror("Error deserializing public key");
                             return 1;
                         }
+
                         //serialize the public key
                         unsigned char* srv_pkey_buf = NULL;
                         int srv_pub_key_len = i2d_PUBKEY(server_keypair, &srv_pkey_buf);
@@ -280,7 +283,7 @@ int main(int argc, char** argv){
                             printf("%02x", shared_secret_init[i]);
                         }
                         printf("\n");
-
+                        free(shared_secret_init);
                         // generate a random IV
                         unsigned char iv[IV_SIZE];
                         // send IV
@@ -350,9 +353,13 @@ int main(int argc, char** argv){
                             checkreturnint(addhs(clients, selind, enc_shared_secret, enc_shared_secret_len, enc_session_key, enc_session_key_len),"error adding client to the list");
                             free(enc_shared_secret);
                             free(enc_session_key);
+                            // send ok to client
+                            checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
                         }
                         else{
                             printf(RED "HMACs do not match, connection aborted\n" RESET);
+                            // send fail to client
+                            checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
                         }
                         free(enc_nonce);
                         free(signature);
@@ -406,7 +413,6 @@ int main(int argc, char** argv){
                         else{
                             printf("HMACs match, registration validated.\n");
                         }
-                        printf("ciphertext_len: %d\n", ciphertext_len);
                         char plaintext [BUF_SIZE];
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, reg_iv, (unsigned char*)plaintext, &plaintext_len);
@@ -419,11 +425,6 @@ int main(int argc, char** argv){
                             printf(RED "Invalid registration request\n" RESET);
                             checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
                             continue;
-                        }
-                        printf("username: %s\n", username);
-                        printf("register hashed pwd: \n");
-                        for(int i = 0; i < HASH_SIZE; i++){
-                            printf("%02x", hashedpsw[i]);
                         }
                         printf("\n");
                         if(isin(clients, username) == 1){
@@ -498,11 +499,15 @@ int main(int argc, char** argv){
                         }
                         unsigned char* salted_hashedpwd = malloc(HASH_SIZE);
                         compute_sha256_salted((unsigned char*)hashedpsw, strlen(hashedpsw),(char*)salted_hashedpwd, salt);
+                        printf("salted_hashedpwd:\n");
+                        for(int i = 0; i < HASH_SIZE; i++){
+                            printf("%02x", salted_hashedpwd[i]);
+                        }
+                        printf("\n");
                         checkreturnint(addinfo(clients, selind, username, email, (char*)salted_hashedpwd, salt), "addinfo error");
-                        printlist(clients);
                         free(ciphertext);
-                        free(salted_hashedpwd);
                         free(salt);
+                        free(salted_hashedpwd);
                     } 
                     else if (strcmp(cmd, "login") == 0) {
                         printf(YELLOW "Login request received\n" RESET);
@@ -549,7 +554,7 @@ int main(int argc, char** argv){
                         char* plaintext = malloc(BUF_SIZE);
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, login_iv, (unsigned char*)plaintext, &plaintext_len);
-                        
+
                         char* username = strtok(plaintext, ",");
                         char* hashedpsw = strtok(NULL, ",");
                         char* recv_timestamp = strtok(NULL, "\0");
@@ -558,12 +563,6 @@ int main(int argc, char** argv){
                             checkreturnint(send(selind, (void*)"fail", CMDLEN, 0), "error sending fail");
                             continue;
                         }
-
-                        printf("login hashed pwd: \n");
-                        for(int i = 0; i < HASH_SIZE; i++){
-                            printf("%02x", hashedpsw[i]);
-                        }
-                        printf("\n");
 
                         if(isloggedin(clients, username) == 1){
                             printf(RED "User \"%s\" is already logged in.\n" RESET, username);
@@ -590,12 +589,11 @@ int main(int argc, char** argv){
                         
                         // making user status = 1 = online
                         changestatus(clients, username, 1);
-                        printlist(clients);
                         puts("sending ok response to client");
                         checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
                         free(login_iv);
                         free(ciphertext);
-
+                        free(plaintext);
                         continue;
                     } else if (strcmp(cmd, "list") == 0) {
                         printf(YELLOW "List request received\n" RESET);
@@ -777,7 +775,6 @@ int main(int argc, char** argv){
                         decrypt_message_AES256ECB(current->sharedSecret, current->sharedSecretLen, srv_AES_256_key, shared_secret, &outlen);
                         int shared_secret_len = AES_KEY_LEN;
 
-                        
                         unsigned char add_iv [IV_SIZE];
                         receiveIVHMAC(selind, add_iv, shared_secret, shared_secret_len);
 
@@ -835,6 +832,8 @@ int main(int argc, char** argv){
                         puts("list after add:");
                         print_messagelist(messages);
 
+                        free(ciphertext);
+                        free(plaintext);
                         continue;
                     } else if (strcmp (cmd, "logout") == 0) {
                         printf(YELLOW "Logout request received\n" RESET);
@@ -844,6 +843,12 @@ int main(int argc, char** argv){
                             checkreturnint(send(selind, (void*)"nohs", CMDLEN, 0), "error sending nohs");
                             continue;
                         }
+
+                        // send ok response to client
+                        checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
+
+                        // put user status to 0 = offline
+                        changestatus(clients, getusername(clients, selind), 0);
 
                         // generate new DH parameters
                         // creating the DH parameters
@@ -986,6 +991,7 @@ int main(int argc, char** argv){
 
                         unsigned char* shared_secret_hash = (unsigned char*)malloc(EVP_MD_size(EVP_sha256()));
                         compute_sha256(shared_secret, shared_secret_len, shared_secret_hash);
+
                         shared_secret_len = HASH_SIZE;
 
                         encrypt_message_AES256ECB(shared_secret_hash, shared_secret_len, srv_AES_256_key, current->sharedSecret, &current->sharedSecretLen);
@@ -994,7 +1000,6 @@ int main(int argc, char** argv){
                         free(shared_secret_hash);
                         free(AES_256_key);
                         free(signature);
-                        current->status = 0;
                     } else {
                         printf(RED "Client #%d quitted.\n" RESET, selind);
                         checkreturnint(removeclient(clients, selind), "error removing client");

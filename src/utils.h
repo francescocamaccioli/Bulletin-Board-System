@@ -261,12 +261,7 @@ void split_hmac_ciphertext(unsigned char* buffer, unsigned char* hmac, unsigned 
 
 // function to compute the HMAC of a message
 void compute_hmac(unsigned char* message, int message_len, unsigned char* key, int key_len, unsigned char* hmac, unsigned int* hmac_len){
-    HMAC_CTX* ctx;
-    ctx = HMAC_CTX_new();
-    HMAC_Init(ctx, key, key_len, EVP_sha256());
-    HMAC_Update(ctx, message, message_len);
-    HMAC_Final(ctx, hmac, hmac_len);
-    HMAC_CTX_free(ctx);
+    HMAC(EVP_sha256(), key, key_len, message, message_len, hmac, hmac_len);
 }
 
 // function to generate an IV and send it together with the HMAC computed with a shared secret

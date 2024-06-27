@@ -3,7 +3,10 @@
 
 int lissoc = 0;
 int login = 0;
-int regexcheckon = 0; // 1 if to turn regex check on, 0 if off
+int regexcheckon = 1; // 1 if to turn regex check on, 0 if off
+unsigned char shared_secret[HASH_SIZE];
+unsigned char* AES_256_key[HASH_SIZE];
+
 
 void help(){
     puts("  ┌───────────────────────────────────────────────────────┐");
@@ -49,7 +52,8 @@ int main(int argc, char* argv[]){
         perror("Server socket connection error\n");
         exit(-1);
     }
-
+    
+    sleep(1);
     puts("Starting Handshake...");
     checkreturnint(send(lissoc, (void*)"hello", CMDLEN, 0), "error sending hello");
 
@@ -69,10 +73,11 @@ int main(int argc, char* argv[]){
     // extracting RSA public key from certificate
     EVP_PKEY* server_pubkey = X509_get_pubkey(server_cert);
     checkrnull(server_pubkey, "error extracting public key from certificate");
+    /* 
     RSA* rsa_pubkey = EVP_PKEY_get1_RSA(server_pubkey);
     checkrnull(rsa_pubkey, "error extracting RSA public key");
     RSA_free(rsa_pubkey);
-
+     */
     // at the moment we assume that the certificate is valid hence it's self signed
     // we don't request the client to send its certificate for simplicity
 
@@ -223,7 +228,6 @@ int main(int argc, char* argv[]){
     }
     EVP_MD_CTX_free(ctx_verify);
 
-
     // Deserialize the server's public key
     EVP_PKEY* server_pub_key = d2i_PUBKEY(NULL, (const unsigned char**)&server_pub_key_buf, server_pub_key_len);
     if (!server_pub_key) {
@@ -241,12 +245,11 @@ int main(int argc, char* argv[]){
     EVP_PKEY_CTX* ctx_drv = EVP_PKEY_CTX_new(client_keypair, NULL);
     EVP_PKEY_derive_init(ctx_drv);
     EVP_PKEY_derive_set_peer(ctx_drv, server_pub_key);
-    unsigned char* shared_secret_init;
-
+    
     size_t shared_secret_len;
     EVP_PKEY_derive(ctx_drv, NULL, &shared_secret_len);
 
-    shared_secret_init = (unsigned char*)malloc(shared_secret_len);
+    unsigned char* shared_secret_init = (unsigned char*)malloc(shared_secret_len);
     EVP_PKEY_derive(ctx_drv, shared_secret_init, &shared_secret_len);
 
     // hashing the shared secret to obtain the AES 256 key
@@ -269,7 +272,6 @@ int main(int argc, char* argv[]){
 
     
     // computing the hash of the shared secret
-    unsigned char shared_secret[HASH_SIZE];
     compute_sha256(shared_secret_init, shared_secret_len, shared_secret);
     shared_secret_len = HASH_SIZE;
     printf("Shared secret HASH: ");
@@ -302,7 +304,7 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
 
-    // decrypting the nonce using the decryption funciton
+    // decrypting the nonce using the decryption function
     unsigned char decrypted_nonce[nonce_len];
     int decrypted_nonce_len;
     decrypt_message(nonce, nonce_len, AES_256_key, srv_iv, decrypted_nonce, &decrypted_nonce_len);
@@ -343,6 +345,15 @@ int main(int argc, char* argv[]){
     free(nonce);
     free(hmac);
     free(encrypted_auth);
+
+    // receive response from server
+    char* response = (char*)malloc(CMDLEN);
+    checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
+    if (strcmp(response, "ok") != 0){
+        puts(RED"Handshake failed, aborting."RESET);
+        exit(-1);
+    }
+    free(response);
     puts(GREEN"Handshake successfully completed!"RESET);
     
     // Client's command parsing loop
@@ -351,14 +362,13 @@ int main(int argc, char* argv[]){
 
     while (1) {
         
-        printf("Enter command: \n> "CYAN);
+        printf("Enter command: \n> ");
         if (fgets(input, BUF_SIZE, stdin) == NULL) {
             perror("Error reading input");
             continue;
         }
         // Remove newline character
         input[strcspn(input, "\n")] = 0;
-        printf(RESET);
         char* command = strtok(input, " ");
         char* arg = strtok(NULL, " ");
 
@@ -377,7 +387,7 @@ int main(int argc, char* argv[]){
             char* password = strtok(NULL, " ");
             char* rest = strtok(NULL, "\0");
             if(!email || !username || !password){
-                puts("Missing argument!\nUsage: register <email> <username> <password>");
+                puts(YELLOW"Missing argument!\nUsage: register <email> <username> <password>"RESET);
                 continue;
             }
             if(rest){
@@ -479,16 +489,13 @@ int main(int argc, char* argv[]){
             compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_reg, &hmac_reg_len);
             long sendlen = HMAC_SIZE + ciphertext_len;
             uint32_t sendlen_n = htonl(sendlen);
-            printf("sendlen: %ld\n", sendlen);
             unsigned char sendbuf[sendlen];
             concatenate_hmac_ciphertext(hmac_reg, ciphertext, ciphertext_len, sendbuf);
             checkreturnint(send(lissoc, (void*)&sendlen_n, sizeof(uint32_t), 0), "error sending sendlen");
             checkreturnint(send(lissoc, sendbuf, sendlen, 0), "error sending sendbuf");
-            printf("Sent register request\n");
 
             // receiving response from server
             char* response = (char*)malloc(CMDLEN);
-            puts("receiving response");
             checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
             if (strcmp(response, "ok") == 0){
                 // receving challenge from server
@@ -506,7 +513,7 @@ int main(int argc, char* argv[]){
                 // computing HMAC over challenge
                 unsigned char* hmac_chal = (unsigned char*)malloc(HMAC_SIZE);
                 unsigned int hmac_chal_len;
-                compute_hmac(challenge, 32, shared_secret, shared_secret_len, hmac_chal, &hmac_chal_len);
+                compute_hmac((unsigned char*)challenge, 32, shared_secret, shared_secret_len, hmac_chal, &hmac_chal_len);
 
                 // writing the hmac to its file
                 FILE* hmac_file = fopen("chall_hmac.txt", "w");
@@ -538,7 +545,7 @@ int main(int argc, char* argv[]){
             char* password = strtok(NULL, " ");
             char* rest = strtok(NULL, "\0");
             if(!username || !password){
-                puts("Missing argument!\nUsage: login <username> <password>");
+                puts(YELLOW"Missing argument!\nUsage: login <username> <password>"RESET);
                 continue;
             }
             if(rest){
@@ -604,7 +611,7 @@ int main(int argc, char* argv[]){
 
         } else if (strcmp(input, "list") == 0) {
             if(!arg){
-                puts("Missing argument!\nUsage: list <n>");
+                puts(YELLOW"Missing argument!\nUsage: list <n>"RESET);
                 continue;
             }
             int n = atoi(arg);
@@ -695,7 +702,7 @@ int main(int argc, char* argv[]){
             free(response);
         } else if (strcmp(input, "get") == 0) {
             if(!arg){
-                puts("Missing argument!\nUsage: get <mid>");
+                puts(YELLOW"Missing argument!\nUsage: get <mid>"RESET);
                 continue;
             }
             int mid = atoi(arg);
@@ -797,7 +804,7 @@ int main(int argc, char* argv[]){
             char* body = strtok(NULL, "\0");
             
             if(!title || !body){
-                puts("Missing argument!\nUsage: add <title> <body>");
+                puts(YELLOW"Missing argument!\nUsage: add <title> <body>"RESET);
                 continue;
             }
 
@@ -842,6 +849,17 @@ int main(int argc, char* argv[]){
             printf("Logging out...\n");
             login = 0;
             checkreturnint(send(lissoc, (void*)"logout", CMDLEN, 0), "error sending logout req");
+
+            // receiving response from server
+            char* response = (char*)malloc(CMDLEN);
+            checkreturnint(recv(lissoc, (void*)response, CMDLEN, 0), "error receiving response");
+            if (strcmp(response, "ok") == 0){
+                puts(GREEN"Logout successful!"RESET);
+            } else {
+                puts(RED"Logout failed, try again."RESET);
+                continue;
+            }
+
             puts("Executing Handshake for next session...");
             EVP_PKEY* dh_params;
             dh_params = EVP_PKEY_new();
@@ -1007,16 +1025,27 @@ int main(int argc, char* argv[]){
             EVP_PKEY_derive_init(ctx_drv);
             EVP_PKEY_derive_set_peer(ctx_drv, server_pub_key);
 
+            size_t shared_secret_len;
             EVP_PKEY_derive(ctx_drv, NULL, &shared_secret_len);
-            EVP_PKEY_derive(ctx_drv, shared_secret, &shared_secret_len);
+
+            unsigned char* shared_secret_init = (unsigned char*)malloc(shared_secret_len);
+            EVP_PKEY_derive(ctx_drv, shared_secret_init, &shared_secret_len);
 
             // hashing the shared secret to obtain the AES 256 key
-            EVP_MD_CTX* keyctx;
-            keyctx = EVP_MD_CTX_new();
-            EVP_DigestInit(keyctx, EVP_sha256());
-            EVP_DigestUpdate(keyctx,(unsigned char*)shared_secret, shared_secret_len);
-            EVP_DigestFinal(keyctx, AES_256_key, (unsigned int*)&AES_256_key_len);
-            EVP_MD_CTX_free(keyctx);
+            compute_sha256(shared_secret_init, shared_secret_len, AES_256_key);
+
+            // reversing the shared secret init
+            for (int i = 0; i < shared_secret_len/2; i++){
+                unsigned char temp = shared_secret_init[i];
+                shared_secret_init[i] = shared_secret_init[shared_secret_len - i - 1];
+                shared_secret_init[shared_secret_len - i - 1] = temp;
+            }
+
+            // computing the hash of the shared secret
+            compute_sha256(shared_secret_init, shared_secret_len, shared_secret);
+            shared_secret_len = HASH_SIZE;
+            free(shared_secret_init);
+
         } else if (strcmp(input, "help") == 0) {
             help();
         } else {

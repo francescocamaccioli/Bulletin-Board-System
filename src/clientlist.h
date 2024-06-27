@@ -332,6 +332,7 @@ void printlist(ClientList* list) {
       for (int i = 0; i < HASH_SIZE; i++) {
          printf("%02x", temp->sharedSecret[i]);
       }
+      printf("\n");
       // printing skey key as hex
       printf("skey Key: ");
       for (int i = 0; i < AES_KEY_LEN; i++) {
