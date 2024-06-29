@@ -123,11 +123,11 @@ int checktimestamp(char* timestamp){
     time_t recv_time = mktime(&recv_tm);
     time_t diff = difftime(now, recv_time);
     if (diff > 60){
-        printf("Timestamps differ by more than 1 minute, connection aborted\n");
+        printf("Timestamps differ by more than 1 minute, aborting.\n");
         return 1;
     }
     else{
-        printf("Timestamps differ by less than 1 minute, connection accepted\n");
+        printf("Timestamps differ by less than 1 minute, request accepted\n");
         return 0;
     }
 }

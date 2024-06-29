@@ -99,7 +99,7 @@ int main(int argc, char** argv){
     int fdmax;
     fdmax=lissoc;
     fflush(stdout);
-    printf("Server is ready to receive requests!\n");
+    printf("Server entering main loop...\n");
     int selind;
     while(1){
         copy = master;
@@ -416,9 +416,9 @@ int main(int argc, char** argv){
                         char plaintext [BUF_SIZE];
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, reg_iv, (unsigned char*)plaintext, &plaintext_len);
-                        char* email = strtok(plaintext, ",");
-                        char* username = strtok(NULL, ",");
-                        char* hashedpsw = strtok(NULL, ",");
+                        char* email = strtok(plaintext, "/");
+                        char* username = strtok(NULL, "/");
+                        char* hashedpsw = strtok(NULL, "/");
                         char* recv_timestamp = strtok(NULL, "\0");
 
                         if(!email || !username || !hashedpsw || !recv_timestamp){
@@ -555,8 +555,8 @@ int main(int argc, char** argv){
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, login_iv, (unsigned char*)plaintext, &plaintext_len);
 
-                        char* username = strtok(plaintext, ",");
-                        char* hashedpsw = strtok(NULL, ",");
+                        char* username = strtok(plaintext, "/");
+                        char* hashedpsw = strtok(NULL, "/");
                         char* recv_timestamp = strtok(NULL, "\0");
                         if(!username || !hashedpsw || !recv_timestamp){
                             printf("Invalid login request\n");
@@ -640,11 +640,17 @@ int main(int argc, char** argv){
                         }
 
                         // decrypt the ciphertext
-                        char* plaintext = malloc(12);
+                        char* plaintext = malloc(4 + 28 + 3);
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, list_iv, (unsigned char*)plaintext, &plaintext_len);
                         
-                        int n = atoi(plaintext);
+                        int n = atoi(strtok(plaintext, "/"));
+                        char* list_timestamp = strtok(NULL, "\0");
+
+                        if(checktimestamp(list_timestamp) == 1){
+                            checkreturnint(send(selind, (void*)"timeout", CMDLEN, 0), "error sending fail");
+                            continue;
+                        }
 
                         if(isloggedin(clients, getusername(clients, selind)) == 0){
                             checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
@@ -654,13 +660,24 @@ int main(int argc, char** argv){
                         checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
                         iv_comm(selind, list_iv, shared_secret, shared_secret_len);
 
-
                         char buffer[BUF_SIZE];
                         get_last_n_messages(messages, n, buffer, BUF_SIZE, srv_AES_256_key);
-                        unsigned char* enc_buffer = (unsigned char*)malloc(BUF_SIZE*n+16);
+                        // concatenate the buffer with the timestamp
+                        char* timestamp = create_timestamp();
+                        size_t timestamp_len = strlen(timestamp);
+                        size_t buffer_len = strlen(buffer);
+                        size_t new_buffer_len = buffer_len + 1 + timestamp_len;
+                        char new_buffer[new_buffer_len + 1];
+                        memcpy(new_buffer, buffer, buffer_len);
+                        new_buffer[buffer_len] = '/';
+                        memcpy(new_buffer + buffer_len + 1, timestamp, timestamp_len);
+                        new_buffer[new_buffer_len] = '\0';
+                        free(timestamp);
+
+                        unsigned char* enc_buffer = (unsigned char*)malloc((BUF_SIZE+28)*n+16);
                         int enc_buffer_len;
                         // encrypting buffer with AES CBC to send it to client
-                        encrypt_message((unsigned char*)buffer, strlen(buffer)+1, AES_256_key, list_iv, enc_buffer, &enc_buffer_len);
+                        encrypt_message((unsigned char*)new_buffer, new_buffer_len, AES_256_key, list_iv, enc_buffer, &enc_buffer_len);
                         unsigned char encbuffer_hmac[HMAC_SIZE];
                         unsigned int encbuffer_hmac_len;
                         compute_hmac(enc_buffer, enc_buffer_len, shared_secret, shared_secret_len, encbuffer_hmac, &encbuffer_hmac_len);
@@ -723,13 +740,18 @@ int main(int argc, char** argv){
                         }
 
                         // decrypt the ciphertext
-                        char* plaintext = malloc(12);
+                        char* plaintext = malloc(4 + 28 + 3);
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, (unsigned char*)get_iv, (unsigned char*)plaintext, &plaintext_len);
                         free(ciphertext);
 
-                        int mid = atoi(plaintext);
-                        free(plaintext);
+                        int mid = atoi(strtok(plaintext, "/"));
+                        char* get_timestamp = strtok(NULL, "\0");
+
+                        if(checktimestamp(get_timestamp) == 1){
+                            checkreturnint(send(selind, (void*)"timeout", CMDLEN, 0), "error sending fail");
+                            continue;
+                        }
 
                         if(isloggedin(clients, getusername(clients, selind)) == 0){
                             checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
@@ -744,10 +766,22 @@ int main(int argc, char** argv){
                         char buffer[BUF_SIZE];
                         getmessage(messages, mid, buffer, BUF_SIZE, srv_AES_256_key);
 
+                        // concatenate the buffer with the timestamp
+                        char* timestamp = create_timestamp();
+                        size_t timestamp_len = strlen(timestamp);
+                        size_t buffer_len = strlen(buffer);
+                        size_t new_buffer_len = buffer_len + 1 + timestamp_len;
+                        char new_buffer[new_buffer_len + 1];
+                        memcpy(new_buffer, buffer, buffer_len);
+                        new_buffer[buffer_len] = '/';
+                        memcpy(new_buffer + buffer_len + 1, timestamp, timestamp_len);
+                        new_buffer[new_buffer_len] = '\0';
+                        free(timestamp);
+
                         unsigned char* enc_buffer = (unsigned char*)malloc(BUF_SIZE+16);
                         int enc_buffer_len;
                         // encrypting buffer with AES CBC to send it to client
-                        encrypt_message((unsigned char*)buffer, strlen(buffer)+1, AES_256_key, (unsigned char*)iv, enc_buffer, &enc_buffer_len);
+                        encrypt_message((unsigned char*)new_buffer, new_buffer_len, AES_256_key, (unsigned char*)iv, enc_buffer, &enc_buffer_len);
                         unsigned char encbuffer_hmac[HMAC_SIZE];
                         unsigned int encbuffer_hmac_len;
                         compute_hmac(enc_buffer, enc_buffer_len, shared_secret, shared_secret_len, encbuffer_hmac, &encbuffer_hmac_len);
@@ -759,6 +793,7 @@ int main(int argc, char** argv){
                         checkreturnint(send(selind, (void*)&sendlen_n, sizeof(uint32_t), 0), "error sending sendlen");
                         checkreturnint(send(selind, sendbuf, sendlen, 0), "error sending sendbuf");
                         free(enc_buffer);
+                        free(plaintext);
                         continue;
                     } else if (strcmp(cmd, "add") == 0) {
                         printf(YELLOW "Add request received\n" RESET);
@@ -818,7 +853,7 @@ int main(int argc, char** argv){
                         int plaintext_len;
                         decrypt_message(ciphertext, ciphertext_len, AES_256_key, add_iv, (unsigned char*)plaintext, &plaintext_len);
 
-                        char* title = strtok(plaintext, ",");
+                        char* title = strtok(plaintext, "/");
                         char* body = strtok(NULL, "\0");
 
                         char enc_body[BODY_LEN];

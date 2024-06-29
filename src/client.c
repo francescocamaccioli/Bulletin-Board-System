@@ -3,7 +3,7 @@
 
 int lissoc = 0;
 int login = 0;
-int regexcheckon = 1; // 1 if to turn regex check on, 0 if off
+int regexcheckon = 0; // 1 if to turn regex check on, 0 if off
 unsigned char shared_secret[HASH_SIZE];
 unsigned char* AES_256_key[HASH_SIZE];
 
@@ -473,7 +473,7 @@ int main(int argc, char* argv[]){
             };
             
             // build a string tosend with email, username, password hash and timestamp
-            snprintf(tosend, total_len, "%s,%s,%s,%s", email, username, pwd_hash_hex, reg_timestamp);
+            snprintf(tosend, total_len, "%s/%s/%s/%s", email, username, pwd_hash_hex, reg_timestamp);
             
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
@@ -573,7 +573,7 @@ int main(int argc, char* argv[]){
                 perror("Error creating packet..");
                 continue;
             };
-            snprintf(tosend, total_len, "%s,%s,%s", username, pwd_hash_hex, login_timestamp);
+            snprintf(tosend, total_len, "%s/%s/%s", username, pwd_hash_hex, login_timestamp);
             
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
@@ -626,21 +626,24 @@ int main(int argc, char* argv[]){
                 continue;
             }
             checkreturnint(send(lissoc, (void*)"list", CMDLEN, 0), "error sending login");
-            char* tosend = malloc(12);
+
+            char* list_timestamp = create_timestamp();
+            int total_len = 4 + strlen(list_timestamp) + 3;
+            char* tosend = malloc(total_len);
             if (tosend == NULL) {
                 fprintf(stderr, "Memory allocation failed\n");
                 return 1;
             }
-            snprintf(tosend, 12, "%d", n);
+            snprintf(tosend, total_len, "%d/%s", n, list_timestamp);
 
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
             // sending it to client with its HMAC
             iv_comm(lissoc, iv, shared_secret, shared_secret_len);
             // encrypting with AES CBC mode
-            unsigned char* ciphertext = (unsigned char*)malloc(sizeof(n) + 16);
+            unsigned char* ciphertext = (unsigned char*)malloc(total_len + 16);
             int ciphertext_len;
-            encrypt_message((unsigned char*)tosend, sizeof(n), AES_256_key, iv, ciphertext, &ciphertext_len);
+            encrypt_message((unsigned char*)tosend, total_len, AES_256_key, iv, ciphertext, &ciphertext_len);
             unsigned char* hmac_log = (unsigned char*)malloc(HMAC_SIZE);
             unsigned int hmac_log_len;
             compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_log, &hmac_log_len);
@@ -648,7 +651,6 @@ int main(int argc, char* argv[]){
             uint32_t sendlen_n = htonl(sendlen);
             unsigned char sendbuf[sendlen];
             concatenate_hmac_ciphertext(hmac_log, ciphertext, ciphertext_len, sendbuf);
-
             checkreturnint(send(lissoc, (void*)&sendlen_n, sizeof(uint32_t), 0), "error sending sendlen");
             checkreturnint(send(lissoc, sendbuf, sendlen, 0), "error sending sendbuf");
             free(tosend);
@@ -689,8 +691,21 @@ int main(int argc, char* argv[]){
                 unsigned char* plaintext = (unsigned char*)malloc(ciphertext_len);
                 int plaintext_len;
                 decrypt_message(ciphertext, ciphertext_len, AES_256_key, iv_list, plaintext, &plaintext_len);
-                // printing the message
-                printf("Latest %d Messages in BBS:\n%s", n, plaintext);
+
+                // split messages from the timestamp
+                char* messages = strtok(plaintext, "/");
+                char* timestamp = strtok(NULL, "\0");
+
+                // check timestamp
+                if (strcmp(timestamp, list_timestamp) != 0){
+                    puts("Timestamp check failed, aborting.");
+                    continue;
+                }
+                else{
+                    puts("Timestamp check passed.");
+                    // printing the message
+                    printf("Latest %d Messages in BBS:\n%s", n, messages);
+                }
                 free(hmac_list_check);
                 free(iv_list);
                 free(hmac_list);
@@ -716,21 +731,25 @@ int main(int argc, char* argv[]){
                 continue;
             }
             checkreturnint(send(lissoc, (void*)"get", CMDLEN, 0), "error sending get req");
-            char* tosend = malloc(12);
+
+            char* get_timestamp = create_timestamp();
+            int total_len = 4 + strlen(get_timestamp) + 3;
+            
+            char* tosend = malloc(total_len);
             if (tosend == NULL) {
                 fprintf(stderr, "Memory allocation failed\n");
                 return 1;
             }
-            snprintf(tosend, 12, "%d", mid);
+            snprintf(tosend, total_len, "%d/%s", mid, get_timestamp);
 
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
             // sending it to client with its HMAC
             iv_comm(lissoc, iv, shared_secret, shared_secret_len);
             // encrypting with AES CBC mode
-            unsigned char* ciphertext = (unsigned char*)malloc(sizeof(mid) + 16);
+            unsigned char* ciphertext = (unsigned char*)malloc(total_len + 16);
             int ciphertext_len;
-            encrypt_message((unsigned char*)tosend, sizeof(mid), AES_256_key, iv, ciphertext, &ciphertext_len);
+            encrypt_message((unsigned char*)tosend, total_len, AES_256_key, iv, ciphertext, &ciphertext_len);
             unsigned char* hmac_get = (unsigned char*)malloc(HMAC_SIZE);
             unsigned int hmac_get_len;
             compute_hmac((unsigned char*)ciphertext, ciphertext_len, shared_secret, shared_secret_len, hmac_get, &hmac_get_len);
@@ -779,15 +798,27 @@ int main(int argc, char* argv[]){
                 int plaintext_len;
                 decrypt_message(ciphertext, ciphertext_len, AES_256_key, iv_get, plaintext, &plaintext_len);
                 
-                // write the message to a file
-                FILE* f = fopen("messages.txt", "a");
-                if (f == NULL){
-                    perror("Error opening file");
-                    exit(EXIT_FAILURE);
+                // split messages from the timestamp
+                char* message = strtok(plaintext, "/");
+                char* timestamp = strtok(NULL, "\0");
+
+                // check timestamp
+                if (strcmp(timestamp, get_timestamp) != 0){
+                    puts("Timestamp check failed, aborting.");
+                    continue;
                 }
-                fprintf(f, "%s", plaintext);
-                fclose(f);
-                puts("Message saved to messages.txt");
+                else{
+                    puts("Timestamp check passed.");
+                    // write the message to a file
+                    FILE* f = fopen("messages.txt", "a");
+                    if (f == NULL){
+                        perror("Error opening file");
+                        exit(EXIT_FAILURE);
+                    }
+                    fprintf(f, "%s", message);
+                    fclose(f);
+                    puts("Message saved to messages.txt");
+                }
                 free(hmac_get_check);
                 free(iv_get);
             } else if (strcmp(response, "notlogged") == 0){
@@ -811,7 +842,7 @@ int main(int argc, char* argv[]){
             char* tosend = malloc(strlen(title)+strlen(body)+3);
             checkreturnint(send(lissoc, (void*)"add", CMDLEN, 0), "error sending add req");
             int total_len = strlen(title)+strlen(body)+3;
-            snprintf(tosend, total_len, "%s,%s", title, body);
+            snprintf(tosend, total_len, "%s/%s", title, body);
             // generating IV for AES encryption
             unsigned char* iv = (unsigned char*)malloc(IV_SIZE);
             // sending it to client with its HMAC
