@@ -689,7 +689,7 @@ int main(int argc, char* argv[]){
                 char* timestamp = strtok(NULL, "\0");
 
                 // check timestamp
-                if (strcmp(timestamp, list_timestamp) != 0){
+                if (checktimestamp(timestamp) != 0){
                     puts("Timestamp check failed, aborting.");
                     continue;
                 }
@@ -795,7 +795,7 @@ int main(int argc, char* argv[]){
                 char* timestamp = strtok(NULL, "\0");
 
                 // check timestamp
-                if (strcmp(timestamp, get_timestamp) != 0){
+                if (checktimestamp(timestamp) != 0){
                     puts("Timestamp check failed, aborting.");
                     continue;
                 }

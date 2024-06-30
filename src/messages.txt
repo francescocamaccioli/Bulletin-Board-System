@@ -8,3 +8,8 @@ Title: lol
 Author: bb
 Body: 123
 
+Message id: 0
+Title: prova
+Author: bb
+Body: brat
+

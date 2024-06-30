@@ -16,7 +16,6 @@
 #include <signal.h>
 #include <errno.h>
 #include <sys/select.h>
-#include <sys/time.h>
 
 #define BUF_SIZE 4096
 #define TIMESTAMP_LEN 30
