@@ -53,31 +53,20 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
     
-    sleep(1);
     puts("Starting Handshake...");
     checkreturnint(send(lissoc, (void*)"hello", CMDLEN, 0), "error sending hello");
-
-    puts("Receiving certificate from server");
-    // receiving server certificate from socket
+    
+    FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
+    checkrnull(server_cert_file, "Failed to open server certificate file");
     X509* server_cert;
-    uint32_t cert_len;
-    checkreturnint(recv(lissoc, (void*)&cert_len, sizeof(uint32_t), 0), "error receiving server cert");
-    long cert_len_long = ntohl(cert_len);
-    unsigned char* cert_buffer = (unsigned char*)malloc(cert_len_long);
-    checkreturnint(recv(lissoc, (void*)cert_buffer, cert_len_long, 0), "error receiving server certificate");
+    server_cert = PEM_read_X509(server_cert_file, NULL, NULL, NULL);
+    checkrnull(server_cert, "Failed to read server certificate");
+    fclose(server_cert_file);
 
-    // deserialize certificate using d2i_X509
-    server_cert = d2i_X509(NULL, (const unsigned char**)&cert_buffer, cert_len_long);
-    checkrnull(server_cert, "error deserializing server certificate");
-
-    // extracting RSA public key from certificate
+    //extract public key from server certificate
     EVP_PKEY* server_pubkey = X509_get_pubkey(server_cert);
-    checkrnull(server_pubkey, "error extracting public key from certificate");
-    /* 
-    RSA* rsa_pubkey = EVP_PKEY_get1_RSA(server_pubkey);
-    checkrnull(rsa_pubkey, "error extracting RSA public key");
-    RSA_free(rsa_pubkey);
-     */
+    checkrnull(server_pubkey, "Failed to extract server public key");
+
     // at the moment we assume that the certificate is valid hence it's self signed
     // we don't request the client to send its certificate for simplicity
 
@@ -281,7 +270,6 @@ int main(int argc, char* argv[]){
     printf("\n");
     free(shared_secret_init);
 
-
     unsigned char* srv_iv = malloc(IV_SIZE);
     if(receiveIVHMAC(lissoc, srv_iv, shared_secret, shared_secret_len) < 0){
         close(lissoc);
@@ -345,6 +333,10 @@ int main(int argc, char* argv[]){
     free(nonce);
     free(hmac);
     free(encrypted_auth);
+    DH_free(dh);
+    EVP_PKEY_free(client_keypair);
+    EVP_PKEY_CTX_free(pkDHctx);
+    EVP_PKEY_free(dh_params);
 
     // receive response from server
     char* response = (char*)malloc(CMDLEN);
@@ -693,7 +685,7 @@ int main(int argc, char* argv[]){
                 decrypt_message(ciphertext, ciphertext_len, AES_256_key, iv_list, plaintext, &plaintext_len);
 
                 // split messages from the timestamp
-                char* messages = strtok(plaintext, "/");
+                char* messages = strtok((char*)plaintext, "/");
                 char* timestamp = strtok(NULL, "\0");
 
                 // check timestamp
@@ -799,7 +791,7 @@ int main(int argc, char* argv[]){
                 decrypt_message(ciphertext, ciphertext_len, AES_256_key, iv_get, plaintext, &plaintext_len);
                 
                 // split messages from the timestamp
-                char* message = strtok(plaintext, "/");
+                char* message = strtok((char*)plaintext, "/");
                 char* timestamp = strtok(NULL, "\0");
 
                 // check timestamp

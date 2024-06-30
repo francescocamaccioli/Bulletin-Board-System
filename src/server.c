@@ -15,17 +15,6 @@ int main(int argc, char** argv){
     ClientList* clients = create_clientlist();
     MessageList messages = NULL;
 
-    FILE *server_cert_file = fopen("server_cert_mykey.pem", "r");
-    checkrnull(server_cert_file, "Failed to open server certificate file");
-    X509* server_cert;
-    server_cert = PEM_read_X509(server_cert_file, NULL, NULL, NULL);
-    checkrnull(server_cert, "Failed to read server certificate");
-    fclose(server_cert_file);
-
-    //extract public key from server certificate
-    EVP_PKEY* server_pub_key = X509_get_pubkey(server_cert);
-    checkrnull(server_pub_key, "Failed to extract server public key");
-
     FILE* rsa_priv_key_file = fopen("server_privkey.pem", "r");
     if (!rsa_priv_key_file) {
         perror("Failed to open RSA private key file");
@@ -48,27 +37,6 @@ int main(int argc, char** argv){
     unsigned char srv_AES_256_key[HASH_SIZE];
     compute_sha256(rsa_priv_key_buf, rsa_priv_key_len, srv_AES_256_key);
     free(rsa_priv_key_buf);
-
-    /*
-     RSA* rsa = EVP_PKEY_get1_RSA(server_pub_key);
-    if (rsa) {
-        RSA_free(rsa);
-    } else {
-        printf("Public key is not an RSA key.\n");
-    }
-    */
-
-    // Serializing the certificate to send it to the client
-    unsigned char *cert_buf = NULL;
-    long cert_len = i2d_X509(server_cert, &cert_buf);
-    if (cert_len < 0) {
-        perror("Failed to serialize server certificate");
-        EVP_PKEY_free(server_pub_key);
-        X509_free(server_cert);
-        return 1;
-    }
-
-    uint32_t cert_len_n = htonl(cert_len);
 
     OpenSSL_add_all_algorithms();
     struct sockaddr_in srv_addr, server_addr;
@@ -126,19 +94,6 @@ int main(int argc, char** argv){
                     if(strcmp(cmd, "hello") == 0){
                         printf(YELLOW "Hello received from client #%d\n" RESET, selind);
                         printf("Client #%d starting handshake\n", selind);
-                        if(send(selind, (void*)&cert_len_n, sizeof(uint32_t), 0) < 0){
-                            perror("Failed to send certificate length");
-                            EVP_PKEY_free(server_pub_key);
-                            X509_free(server_cert);
-                            return 1;
-                        }
-                        if(send(selind, (void*)cert_buf, cert_len, 0) < 0){
-                            perror("Failed to send certificate");
-                            EVP_PKEY_free(server_pub_key);
-                            X509_free(server_cert);
-                            return 1;
-                        }
-                        printf("Certificate sent\n");
 
                         // creating the DH parameters
                         // generate DH parameters using RFC 5114: p and g are fixed
@@ -210,14 +165,14 @@ int main(int argc, char** argv){
                             perror("Error allocating memory for public key");
                             return 1;
                         }
-
+                        
                         // Receive the serialized public key
                         bytes_received = recv(selind, (void*)pub_key_buf, pub_key_len, 0);
                         if (bytes_received < 0) {
                             perror("Error receiving public key");
                             return 1;
                         }
-
+                        
                         // Deserialize the public key
                         EVP_PKEY* client_public_key = d2i_PUBKEY(NULL, (const unsigned char**)&pub_key_buf, pub_key_len);
                         if (!client_public_key) {
@@ -232,6 +187,7 @@ int main(int argc, char** argv){
                             perror("Failed to serialize public key");
                         }
 
+                        puts("sending public key to client");
                         // Send the length of the serialized public key buffer
                         uint32_t srv_pub_key_len_n = htonl(srv_pub_key_len);
                         checkreturnint(send(selind, (void*)&srv_pub_key_len_n, sizeof(uint32_t), 0), "Error sending public key length");
@@ -245,6 +201,7 @@ int main(int argc, char** argv){
                         // sign public key with function
                         sign_message(rsa_priv_key, srv_pkey_buf, srv_pub_key_len, signature, &signature_len);
 
+                        puts("sending signature to client");
                         // send signature length to the client
                         uint32_t signature_len_n = htonl(signature_len);
                         checkreturnint(send(selind, (void*)&signature_len_n, sizeof(uint32_t), 0), "Error sending signature length");
@@ -262,6 +219,7 @@ int main(int argc, char** argv){
                         unsigned char* shared_secret_init = malloc(shared_secret_len);
                         EVP_PKEY_derive(ctx_drv, shared_secret_init, &shared_secret_len);
 
+                        puts("shared secret init generated");
                         // generate the parameters for AES 256 CBC encryption
                         // computing SHA256 hash of the shared secret
                         unsigned char AES_256_key[HASH_SIZE];
@@ -278,12 +236,18 @@ int main(int argc, char** argv){
                         unsigned char shared_secret[HASH_SIZE];
                         compute_sha256(shared_secret_init, shared_secret_len, shared_secret);
                         shared_secret_len = HASH_SIZE;
-                        printf("Shared secret HASH: ");
-                        for (int i = 0; i < shared_secret_len; i++){
-                            printf("%02x", shared_secret_init[i]);
-                        }
-                        printf("\n");
+
+                        // freeing DH parameters
                         free(shared_secret_init);
+                        EVP_PKEY_CTX_free(ctx_drv);
+                        EVP_PKEY_free(client_public_key);
+                        OPENSSL_free(srv_pkey_buf);
+                        OPENSSL_free(pub_key_str);
+                        DH_free(dh);
+                        EVP_PKEY_free(server_keypair);
+                        EVP_PKEY_CTX_free(pkDHctx);
+                        EVP_PKEY_free(dh_params);
+
                         // generate a random IV
                         unsigned char iv[IV_SIZE];
                         // send IV
@@ -1032,9 +996,19 @@ int main(int argc, char** argv){
                         encrypt_message_AES256ECB(shared_secret_hash, shared_secret_len, srv_AES_256_key, current->sharedSecret, &current->sharedSecretLen);
                         encrypt_message_AES256ECB(AES_256_key, AES_KEY_LEN, srv_AES_256_key, current->sessionKey, &current->sessionKeyLen);
                         printlist(clients);
+
+                        // freeing dh parameters
                         free(shared_secret_hash);
                         free(AES_256_key);
                         free(signature);
+                        EVP_PKEY_CTX_free(ctx_drv);
+                        EVP_PKEY_free(client_public_key);
+                        OPENSSL_free(srv_pkey_buf);
+                        OPENSSL_free(pub_key_str);
+                        DH_free(dh);
+                        EVP_PKEY_free(server_keypair);
+                        EVP_PKEY_CTX_free(pkDHctx);
+                        EVP_PKEY_free(dh_params);
                     } else {
                         printf(RED "Client #%d quitted.\n" RESET, selind);
                         checkreturnint(removeclient(clients, selind), "error removing client");
@@ -1046,9 +1020,6 @@ int main(int argc, char** argv){
             }
         }
     }
-    EVP_PKEY_free(server_pub_key);
-    X509_free(server_cert);
-    free(cert_buf);
     free_clientlist(clients);
     free_messagelist(messages);
 }
