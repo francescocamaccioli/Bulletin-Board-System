@@ -620,6 +620,12 @@ int main(int argc, char** argv){
                             checkreturnint(send(selind, (void*)"notlogged", CMDLEN, 0), "error sending notlogged");
                             continue;
                         }
+
+                        // check if the message list is empty
+                        if(messages == NULL){
+                            checkreturnint(send(selind, (void*)"empty", CMDLEN, 0), "error sending empty");
+                            continue;
+                        }
                         
                         checkreturnint(send(selind, (void*)"ok", CMDLEN, 0), "error sending ok");
                         iv_comm(selind, list_iv, shared_secret, shared_secret_len);

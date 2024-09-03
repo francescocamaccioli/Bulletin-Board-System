@@ -79,7 +79,7 @@ void get_last_n_messages(MessageList list, int n, char* buffer, size_t buffer_si
         char decrypted_body[BODY_LEN];
         int decrypted_len;
         decrypt_message_AES256ECB((unsigned char*)messages[i]->body, (messages[i]->ct_len)+1, key, (unsigned char*)decrypted_body, &decrypted_len);
-        snprintf(temp, sizeof(temp), "Message id: %d\nTitle: %s\nAuthor: %s\nBody: %s\n\n", messages[i]->mid, messages[i]->title, messages[i]->author, decrypted_body);
+        snprintf(temp, sizeof(temp), "Message id: %d\nAuthor: %s\nTitle: %s\nBody: %s\n\n", messages[i]->mid, messages[i]->author, messages[i]->title, decrypted_body);
         if (strlen(buffer) + strlen(temp) + 1 > buffer_size) {
             // Prevent buffer overflow
             fprintf(stderr, "Buffer size exceeded\n");

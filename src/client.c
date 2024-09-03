@@ -48,7 +48,7 @@ int main(int argc, char* argv[]){
     srv_addr.sin_port=htons(port);
     inet_pton(AF_INET, "127.0.0.1", &srv_addr.sin_addr);
     ret = connect(lissoc, (struct sockaddr*) &srv_addr, sizeof(srv_addr));
-    if (ret < 0){
+    if (ret < 0){*
         perror("Server socket connection error\n");
         exit(-1);
     }
@@ -403,7 +403,7 @@ int main(int argc, char* argv[]){
                 // Validate email
                 comp = regexec(&regex, email, 0, NULL, 0);
                 if (comp) {
-                    fprintf(stderr, "Invalid email format\n");
+                    fprintf(stderr, RED"Invalid email format\n"RESET);
                     continue;
                 }
 
@@ -418,7 +418,7 @@ int main(int argc, char* argv[]){
                 // Validate username
                 comp = regexec(&regex, username, 0, NULL, 0);
                 if (comp) {
-                    fprintf(stderr, "Invalid username format\n");
+                    fprintf(stderr, RED"Invalid username format\n"RESET);
                     continue;
                 }
 
@@ -433,7 +433,7 @@ int main(int argc, char* argv[]){
                 // Validate password
                 comp = regexec(&regex, password, 0, NULL, 0);
                 if (!comp) {
-                    fprintf(stderr, "Invalid password format\n");
+                    fprintf(stderr, RED"Invalid password format\n"RESET);
                     continue;
                 }
 
@@ -702,9 +702,11 @@ int main(int argc, char* argv[]){
                 free(iv_list);
                 free(hmac_list);
             } else if (strcmp(response, "notlogged") == 0){
-                puts("You need to login first!");
+                puts(RED"You need to login first!"RESET);
+            } else if (strcmp(response, "empty") == 0){
+                puts(RED"There are no messages yet."RESET);
             } else {
-                puts("list failed, try again.");
+                puts(RED"list failed, try again."RESET);
             }
             free(response);
         } else if (strcmp(input, "get") == 0) {
@@ -715,11 +717,11 @@ int main(int argc, char* argv[]){
             int mid = atoi(arg);
             char* rest = strtok(NULL, "\0");
             if(rest){
-                puts("Too many arguments.");
+                puts(RED"Too many arguments."RESET);
                 continue;
             }
             if(mid < 0){
-                puts("Invalid mid, try again");
+                puts(RED"Invalid mid, try again"RESET);
                 continue;
             }
             checkreturnint(send(lissoc, (void*)"get", CMDLEN, 0), "error sending get req");
@@ -814,9 +816,9 @@ int main(int argc, char* argv[]){
                 free(hmac_get_check);
                 free(iv_get);
             } else if (strcmp(response, "notlogged") == 0){
-                puts("You need to login first!");
+                puts(RED"You need to login first!"RESET);
             } else {
-                puts("Get failed, try again.");
+                puts(RED"Get failed, try again."RESET);
             }
 
             free(response);
@@ -860,9 +862,9 @@ int main(int argc, char* argv[]){
             if (strcmp(buffer, "ok") == 0){
                 puts(GREEN"Message added successfully!"RESET);
             } else if (strcmp(buffer, "notlogged") == 0){
-                puts("You need to login first!");
+                puts(RED"You need to login first!"RESET);
             } else {
-                puts("Message add failed, try again.");
+                puts(RED"Message add failed, try again."RESET);
             }
         } else if (strcmp(input, "logout") == 0) {
             if(!login){
@@ -1072,7 +1074,7 @@ int main(int argc, char* argv[]){
         } else if (strcmp(input, "help") == 0) {
             help();
         } else {
-            printf("Invalid choice, please try again.\n");
+            printf(RED"Invalid choice, please try again.\n"RESET);
         }
     }
     close(lissoc);
